@@ -1,4 +1,13 @@
-import { CLASSES, COLS, ROWS, TERRAIN, TILE } from './data.js';
+import { CLASSES, COLS, ROWS, TERRAIN, elevAt } from './data.js';
+import {
+  ISO_H,
+  diamondPoints,
+  fromScreen,
+  isoOrigin,
+  sortDrawOrder,
+  toScreen,
+  ELEV_SCALE,
+} from './iso.js';
 
 export class Renderer {
   constructor(canvas) {
@@ -8,45 +17,66 @@ export class Renderer {
     this.animT = 0;
     this.fx = [];
     this.attacks = [];
-    /** @type {Map<string, {dx:number,dy:number,flash:number,shake:number}>} */
+    this.screenFx = null;
     this.unitFx = new Map();
+    this._origin = { ox: 0, oy: 0 };
+    this._drawCells = sortDrawOrder(COLS, ROWS);
+  }
+
+  _syncOrigin() {
+    this._origin = isoOrigin(this.canvas.width, this.canvas.height);
   }
 
   setHover(tile) {
     this.hover = tile;
   }
 
-  addDamageFx(x, y, text, color = '#fff') {
+  pickTile(px, py, map) {
+    this._syncOrigin();
+    return fromScreen(px, py, map, this._origin.ox, this._origin.oy);
+  }
+
+  screenPos(map, x, y, ox = 0, oy = 0) {
+    this._syncOrigin();
+    const elev = elevAt(map, x, y);
+    const p = toScreen(x, y, elev, this._origin.ox, this._origin.oy);
+    return { cx: p.sx + ox, cy: p.sy + oy - 10, elev, sx: p.sx, sy: p.sy };
+  }
+
+  addDamageFx(map, x, y, text, color = '#fff') {
+    const p = this.screenPos(map, x, y);
     this.fx.push({
       type: 'text',
-      x: x * TILE + TILE / 2,
-      y: y * TILE + TILE / 2,
+      x: p.cx,
+      y: p.cy - 22,
       text,
       color,
-      life: 0.9,
-      maxLife: 0.9,
+      life: 0.95,
+      maxLife: 0.95,
     });
   }
 
-  /**
-   * 공격 액션 재생. 애니메이션이 끝날 때까지 Promise.
-   */
-  playAttack(attacker, defender) {
+  playAttack(attacker, defender, map, fxKind = 'slash') {
     const cls = CLASSES[attacker.classId];
-    const kind =
-      cls.id === 'mage' ? 'magic' : cls.id === 'archer' ? 'arrow' : 'slash';
-    const duration = kind === 'slash' ? 0.38 : kind === 'arrow' ? 0.42 : 0.48;
-    const ax = attacker.x * TILE + TILE / 2;
-    const ay = attacker.y * TILE + TILE / 2;
-    const dx = defender.x * TILE + TILE / 2;
-    const dy = defender.y * TILE + TILE / 2;
+    const a = this.screenPos(map, attacker.x, attacker.y);
+    const d = this.screenPos(map, defender.x, defender.y);
+    const duration =
+      ['nova', 'holy', 'rain', 'whirl', 'bless'].includes(fxKind)
+        ? 0.85
+        : ['bash', 'double', 'burst', 'pierce', 'heal'].includes(fxKind)
+          ? 0.58
+          : fxKind === 'slash'
+            ? 0.38
+            : fxKind === 'arrow'
+              ? 0.42
+              : 0.48;
 
     const anim = {
-      kind,
-      ax,
-      ay,
-      dx,
-      dy,
+      kind: fxKind,
+      ax: a.cx,
+      ay: a.cy,
+      dx: d.cx,
+      dy: d.cy,
       attackerId: attacker.id,
       defenderId: defender.id,
       color: cls.color,
@@ -56,15 +86,20 @@ export class Renderer {
     };
     this.attacks.push(anim);
 
-    // 근접은 살짝 돌진
-    if (kind === 'slash') {
-      const ang = Math.atan2(dy - ay, dx - ax);
+    if (['slash', 'bash', 'double', 'holy', 'whirl'].includes(fxKind)) {
+      const ang = Math.atan2(d.cy - a.cy, d.cx - a.cx);
+      const push = fxKind === 'holy' || fxKind === 'whirl' ? 18 : 12;
       this._setUnitFx(attacker.id, {
-        dx: Math.cos(ang) * 14,
-        dy: Math.sin(ang) * 14,
+        dx: Math.cos(ang) * push,
+        dy: Math.sin(ang) * push,
         flash: 0,
         shake: 0,
+        lift: fxKind === 'whirl' ? 8 : 0,
       });
+    }
+
+    if (fxKind === 'nova' || fxKind === 'holy' || fxKind === 'bless') {
+      this.screenFx = { kind: fxKind, life: duration, maxLife: duration };
     }
 
     return new Promise((resolve) => {
@@ -72,64 +107,63 @@ export class Renderer {
     });
   }
 
-  triggerImpact(defenderId, hit) {
-    if (hit) {
-      this._setUnitFx(defenderId, {
-        dx: 0,
-        dy: 0,
-        flash: 0.28,
-        shake: 0.28,
-      });
-      // 충격 파티클
-      const unit = this._lastState?.units?.find((u) => u.id === defenderId);
-      if (unit) {
-        const cx = unit.x * TILE + TILE / 2;
-        const cy = unit.y * TILE + TILE / 2;
-        for (let i = 0; i < 8; i++) {
-          const ang = (Math.PI * 2 * i) / 8 + Math.random() * 0.4;
-          const spd = 40 + Math.random() * 50;
-          this.fx.push({
-            type: 'spark',
-            x: cx,
-            y: cy,
-            vx: Math.cos(ang) * spd,
-            vy: Math.sin(ang) * spd,
-            color: '#ffe8a0',
-            life: 0.35 + Math.random() * 0.15,
-            maxLife: 0.45,
-            size: 2 + Math.random() * 2,
-          });
-        }
+  triggerImpact(defenderId, hit, intense = false) {
+    if (!hit) return;
+    this._setUnitFx(defenderId, {
+      dx: 0,
+      dy: 0,
+      flash: intense ? 0.4 : 0.28,
+      shake: intense ? 0.4 : 0.28,
+      lift: 0,
+    });
+    const unit = this._lastState?.units?.find((u) => u.id === defenderId);
+    if (unit && this._lastState?.map) {
+      const p = this.screenPos(this._lastState.map, unit.x, unit.y);
+      const n = intense ? 14 : 8;
+      for (let i = 0; i < n; i++) {
+        const ang = (Math.PI * 2 * i) / n + Math.random() * 0.3;
+        const spd = 40 + Math.random() * (intense ? 70 : 45);
+        this.fx.push({
+          type: 'spark',
+          x: p.cx,
+          y: p.cy,
+          vx: Math.cos(ang) * spd,
+          vy: Math.sin(ang) * spd - 25,
+          color: intense ? '#a8ffd0' : '#ffe8a0',
+          life: 0.4 + Math.random() * 0.2,
+          maxLife: 0.55,
+          size: 2 + Math.random() * 2.5,
+        });
       }
     }
   }
 
   _setUnitFx(id, partial) {
-    const cur = this.unitFx.get(id) || { dx: 0, dy: 0, flash: 0, shake: 0 };
+    const cur = this.unitFx.get(id) || { dx: 0, dy: 0, flash: 0, shake: 0, lift: 0 };
     this.unitFx.set(id, { ...cur, ...partial });
   }
 
   update(dt) {
     this.animT += dt;
-
     this.fx = this.fx.filter((f) => {
       f.life -= dt;
-      if (f.type === 'text') f.y -= 28 * dt;
+      if (f.type === 'text') f.y -= 32 * dt;
       if (f.type === 'spark') {
         f.x += f.vx * dt;
         f.y += f.vy * dt;
+        f.vy += 45 * dt;
         f.vx *= 0.92;
-        f.vy *= 0.92;
       }
       return f.life > 0;
     });
-
+    if (this.screenFx) {
+      this.screenFx.life -= dt;
+      if (this.screenFx.life <= 0) this.screenFx = null;
+    }
     this.attacks = this.attacks.filter((a) => {
-      const prev = a.life;
       a.life -= dt;
       const progress = 1 - a.life / a.maxLife;
-      // 임팩트 시점 (~70%)
-      if (!a.impact && progress >= 0.7) {
+      if (!a.impact && progress >= 0.62) {
         a.impact = true;
         if (a.onImpact) a.onImpact();
       }
@@ -138,22 +172,26 @@ export class Renderer {
         if (a.onDone) a.onDone();
         return false;
       }
-      // 돌진 복귀
-      if (a.kind === 'slash' && progress > 0.55) {
+      if (['slash', 'bash', 'double', 'holy', 'whirl'].includes(a.kind) && progress > 0.55) {
         const ufx = this.unitFx.get(a.attackerId);
         if (ufx) {
-          ufx.dx *= 0.75;
-          ufx.dy *= 0.75;
+          ufx.dx *= 0.78;
+          ufx.dy *= 0.78;
+          ufx.lift *= 0.85;
         }
       }
-      void prev;
       return true;
     });
-
     for (const [id, ufx] of this.unitFx) {
       if (ufx.flash > 0) ufx.flash -= dt;
       if (ufx.shake > 0) ufx.shake -= dt;
-      if (ufx.flash <= 0 && ufx.shake <= 0 && Math.abs(ufx.dx) < 0.5 && Math.abs(ufx.dy) < 0.5) {
+      if (
+        ufx.flash <= 0 &&
+        ufx.shake <= 0 &&
+        Math.abs(ufx.dx) < 0.5 &&
+        Math.abs(ufx.dy) < 0.5 &&
+        Math.abs(ufx.lift || 0) < 0.5
+      ) {
         if (!this.attacks.some((a) => a.attackerId === id)) this.unitFx.delete(id);
       }
     }
@@ -161,207 +199,474 @@ export class Renderer {
 
   draw(state) {
     this._lastState = state;
+    this._syncOrigin();
     const { ctx, canvas } = this;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    this.drawMap(state.map);
-    this.drawHighlights(state);
-    this.drawUnits(state);
+    this._drawBackdrop(ctx, canvas);
+
+    const unitMap = new Map();
+    for (const u of state.units) {
+      if (u.alive) unitMap.set(`${u.x},${u.y}`, u);
+    }
+
+    for (const cell of this._drawCells) {
+      this._drawTileIso(ctx, state.map, cell.x, cell.y);
+      this._drawTileHighlight(ctx, state, cell.x, cell.y);
+      const unit = unitMap.get(`${cell.x},${cell.y}`);
+      if (unit) this._drawUnitAt(ctx, state, unit);
+    }
+
     this.drawAttacks();
     this.drawHover(state);
     this.drawFx();
+    this._drawScreenFx(ctx, canvas);
   }
 
-  drawMap(map) {
-    const { ctx } = this;
-    for (let y = 0; y < ROWS; y++) {
-      for (let x = 0; x < COLS; x++) {
-        const t = TERRAIN[map[y][x]];
-        const px = x * TILE;
-        const py = y * TILE;
-        const checker = (x + y) % 2 === 0;
-        ctx.fillStyle = checker ? t.color : t.color2;
-        ctx.fillRect(px, py, TILE, TILE);
+  _drawBackdrop(ctx, canvas) {
+    const g = ctx.createLinearGradient(0, 0, 0, canvas.height);
+    g.addColorStop(0, '#243848');
+    g.addColorStop(0.4, '#1a3028');
+    g.addColorStop(1, '#0c1812');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    // 광원 느낌
+    const light = ctx.createRadialGradient(
+      canvas.width * 0.25,
+      canvas.height * 0.1,
+      20,
+      canvas.width * 0.35,
+      canvas.height * 0.4,
+      canvas.width * 0.7
+    );
+    light.addColorStop(0, 'rgba(255, 230, 160, 0.1)');
+    light.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = light;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+  }
 
-        if (map[y][x] === 'forest') {
-          ctx.fillStyle = 'rgba(20, 50, 30, 0.35)';
-          ctx.beginPath();
-          ctx.arc(px + 22, py + 28, 10, 0, Math.PI * 2);
-          ctx.arc(px + 38, py + 34, 12, 0, Math.PI * 2);
-          ctx.arc(px + 30, py + 18, 9, 0, Math.PI * 2);
-          ctx.fill();
-        } else if (map[y][x] === 'hill') {
-          ctx.fillStyle = 'rgba(255,255,255,0.08)';
-          ctx.beginPath();
-          ctx.moveTo(px + 8, py + 48);
-          ctx.lineTo(px + 28, py + 18);
-          ctx.lineTo(px + 52, py + 48);
-          ctx.fill();
-        } else if (map[y][x] === 'fort') {
-          ctx.strokeStyle = 'rgba(230, 210, 150, 0.35)';
-          ctx.lineWidth = 2;
-          ctx.strokeRect(px + 14, py + 14, TILE - 28, TILE - 28);
-          ctx.fillStyle = 'rgba(230, 210, 150, 0.12)';
-          ctx.fillRect(px + 14, py + 14, TILE - 28, TILE - 28);
-        } else if (map[y][x] === 'water') {
-          const wave = Math.sin(this.animT * 2 + x * 0.7 + y) * 2;
-          ctx.fillStyle = 'rgba(180, 230, 255, 0.08)';
-          ctx.fillRect(px + 8, py + 28 + wave, TILE - 16, 3);
-        }
+  _drawScreenFx(ctx, canvas) {
+    if (!this.screenFx) return;
+    const p = 1 - this.screenFx.life / this.screenFx.maxLife;
+    const alpha = p < 0.2 ? p / 0.2 : p > 0.7 ? (1 - p) / 0.3 : 1;
+    ctx.save();
+    ctx.globalAlpha = alpha * 0.28;
+    ctx.fillStyle =
+      this.screenFx.kind === 'nova'
+        ? '#3dff9a'
+        : this.screenFx.kind === 'bless'
+          ? '#ffe9a0'
+          : '#ffe08a';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.restore();
+  }
 
-        ctx.strokeStyle = 'rgba(0,0,0,0.12)';
-        ctx.strokeRect(px + 0.5, py + 0.5, TILE - 1, TILE - 1);
-      }
+  _drawTileIso(ctx, map, x, y) {
+    const tid = map[y][x];
+    const t = TERRAIN[tid];
+    const elev = t.elev;
+    const h = elev * ELEV_SCALE;
+    const { ox, oy } = this._origin;
+    const { sx, sy } = toScreen(x, y, elev, ox, oy);
+    const top = diamondPoints(sx, sy);
+    const bot = diamondPoints(sx, sy + h);
+
+    // 지면 투영 그림자 (남동)
+    ctx.fillStyle = 'rgba(0,0,0,0.22)';
+    ctx.beginPath();
+    const sh = diamondPoints(sx + 10, sy + h + 8);
+    ctx.moveTo(sh.top.x, sh.top.y);
+    ctx.lineTo(sh.right.x, sh.right.y);
+    ctx.lineTo(sh.bottom.x, sh.bottom.y);
+    ctx.lineTo(sh.left.x, sh.left.y);
+    ctx.closePath();
+    ctx.fill();
+
+    // 왼쪽 벽 (서남 — 중간 밝기)
+    ctx.fillStyle = t.sideL;
+    ctx.beginPath();
+    ctx.moveTo(top.left.x, top.left.y);
+    ctx.lineTo(top.bottom.x, top.bottom.y);
+    ctx.lineTo(bot.bottom.x, bot.bottom.y);
+    ctx.lineTo(bot.left.x, bot.left.y);
+    ctx.closePath();
+    ctx.fill();
+    // 왼쪽 벽 음영 그라데이션
+    const lg = ctx.createLinearGradient(top.left.x, top.left.y, top.bottom.x, bot.bottom.y);
+    lg.addColorStop(0, 'rgba(255,255,255,0.06)');
+    lg.addColorStop(1, 'rgba(0,0,0,0.25)');
+    ctx.fillStyle = lg;
+    ctx.beginPath();
+    ctx.moveTo(top.left.x, top.left.y);
+    ctx.lineTo(top.bottom.x, top.bottom.y);
+    ctx.lineTo(bot.bottom.x, bot.bottom.y);
+    ctx.lineTo(bot.left.x, bot.left.y);
+    ctx.closePath();
+    ctx.fill();
+
+    // 오른쪽 벽 (동남 — 더 어두움)
+    ctx.fillStyle = t.sideR;
+    ctx.beginPath();
+    ctx.moveTo(top.right.x, top.right.y);
+    ctx.lineTo(top.bottom.x, top.bottom.y);
+    ctx.lineTo(bot.bottom.x, bot.bottom.y);
+    ctx.lineTo(bot.right.x, bot.right.y);
+    ctx.closePath();
+    ctx.fill();
+    const rg = ctx.createLinearGradient(top.right.x, top.top.y, bot.bottom.x, bot.bottom.y);
+    rg.addColorStop(0, 'rgba(0,0,0,0.05)');
+    rg.addColorStop(1, 'rgba(0,0,0,0.4)');
+    ctx.fillStyle = rg;
+    ctx.beginPath();
+    ctx.moveTo(top.right.x, top.right.y);
+    ctx.lineTo(top.bottom.x, top.bottom.y);
+    ctx.lineTo(bot.bottom.x, bot.bottom.y);
+    ctx.lineTo(bot.right.x, bot.right.y);
+    ctx.closePath();
+    ctx.fill();
+
+    // 윗면 (북서 광원)
+    const checker = (x + y) % 2 === 0;
+    const base = checker ? t.color : t.color2;
+    const tg = ctx.createLinearGradient(top.left.x, top.top.y, top.right.x, top.bottom.y);
+    tg.addColorStop(0, shade(base, 40));
+    tg.addColorStop(0.35, shade(base, 12));
+    tg.addColorStop(0.7, base);
+    tg.addColorStop(1, shade(base, -22));
+    ctx.fillStyle = tg;
+    ctx.beginPath();
+    ctx.moveTo(top.top.x, top.top.y);
+    ctx.lineTo(top.right.x, top.right.y);
+    ctx.lineTo(top.bottom.x, top.bottom.y);
+    ctx.lineTo(top.left.x, top.left.y);
+    ctx.closePath();
+    ctx.fill();
+
+    // 윗면 가장자리 하이라이트
+    ctx.strokeStyle = 'rgba(255,255,255,0.18)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(top.top.x, top.top.y);
+    ctx.lineTo(top.left.x, top.left.y);
+    ctx.stroke();
+    ctx.strokeStyle = 'rgba(0,0,0,0.2)';
+    ctx.beginPath();
+    ctx.moveTo(top.bottom.x, top.bottom.y);
+    ctx.lineTo(top.right.x, top.right.y);
+    ctx.stroke();
+
+    // 지형 디테일
+    if (tid === 'forest') this._drawTreesIso(ctx, sx, sy - 6);
+    else if (tid === 'hill') {
+      ctx.fillStyle = 'rgba(255,255,255,0.12)';
+      ctx.beginPath();
+      ctx.moveTo(sx - 8, sy + 4);
+      ctx.lineTo(sx, sy - 10);
+      ctx.lineTo(sx + 10, sy + 4);
+      ctx.fill();
+    } else if (tid === 'fort') {
+      ctx.fillStyle = 'rgba(230,210,150,0.22)';
+      ctx.beginPath();
+      ctx.moveTo(sx, sy - 8);
+      ctx.lineTo(sx + 10, sy);
+      ctx.lineTo(sx, sy + 8);
+      ctx.lineTo(sx - 10, sy);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = shade(t.sideL, 25);
+      ctx.fillRect(sx - 4, sy - 22, 8, 14);
+    } else if (tid === 'water') {
+      const wave = Math.sin(this.animT * 2.2 + x + y) * 2;
+      ctx.strokeStyle = 'rgba(180,230,255,0.35)';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(sx - 14, sy + wave);
+      ctx.quadraticCurveTo(sx, sy - 4 + wave, sx + 14, sy + wave);
+      ctx.stroke();
     }
   }
 
-  drawHighlights(state) {
-    const { ctx } = this;
-    const pulse = 0.35 + Math.sin(this.animT * 3) * 0.08;
+  _drawTreesIso(ctx, sx, sy) {
+    for (const [dx, dy, r] of [
+      [-8, 2, 9],
+      [7, 4, 8],
+      [0, -2, 10],
+    ]) {
+      ctx.fillStyle = '#3a2a18';
+      ctx.fillRect(sx + dx - 1.5, sy + dy, 3, 7);
+      const g = ctx.createRadialGradient(sx + dx, sy + dy - 6, 1, sx + dx, sy + dy - 4, r);
+      g.addColorStop(0, '#5a9a60');
+      g.addColorStop(1, '#1a3a22');
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(sx + dx, sy + dy - 6, r, 0, Math.PI * 2);
+      ctx.fill();
+      // 캐노피 그림자
+      ctx.fillStyle = 'rgba(0,0,0,0.2)';
+      ctx.beginPath();
+      ctx.ellipse(sx + dx + 3, sy + dy + 6, r * 0.7, 3, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  _drawTileHighlight(ctx, state, x, y) {
+    const pulse = 0.3 + Math.sin(this.animT * 3) * 0.1;
+    const elev = elevAt(state.map, x, y);
+    const { sx, sy } = toScreen(x, y, elev, this._origin.ox, this._origin.oy);
+    const d = diamondPoints(sx, sy);
+
+    const fillDiamond = (color) => {
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.moveTo(d.top.x, d.top.y);
+      ctx.lineTo(d.right.x, d.right.y);
+      ctx.lineTo(d.bottom.x, d.bottom.y);
+      ctx.lineTo(d.left.x, d.left.y);
+      ctx.closePath();
+      ctx.fill();
+    };
 
     if (state.mode === 'move' || state.mode === 'selected') {
-      for (const t of state.moveTiles) {
-        ctx.fillStyle = `rgba(255, 210, 64, ${pulse})`;
-        ctx.fillRect(t.x * TILE, t.y * TILE, TILE, TILE);
+      if (state.moveTiles.some((t) => t.x === x && t.y === y)) {
+        fillDiamond(`rgba(255, 210, 64, ${pulse})`);
       }
-      for (const t of state.attackPreviewTiles) {
-        const occupied = state.units.some(
-          (u) => u.alive && u.team === 'enemy' && u.x === t.x && u.y === t.y
-        );
-        if (!occupied) continue;
-        ctx.fillStyle = `rgba(210, 70, 60, ${pulse * 0.55})`;
-        ctx.fillRect(t.x * TILE, t.y * TILE, TILE, TILE);
+      if (
+        state.attackPreviewTiles.some((t) => t.x === x && t.y === y) &&
+        state.units.some((u) => u.alive && u.team === 'enemy' && u.x === x && u.y === y)
+      ) {
+        fillDiamond(`rgba(210, 70, 60, ${pulse * 0.5})`);
       }
     }
 
-    if (state.mode === 'attack') {
-      for (const t of state.attackTiles) {
-        ctx.fillStyle = `rgba(210, 70, 60, ${pulse})`;
-        ctx.fillRect(t.x * TILE, t.y * TILE, TILE, TILE);
+    if (['attack', 'skill', 'ultimate', 'heal'].includes(state.mode)) {
+      if (state.attackTiles.some((t) => t.x === x && t.y === y)) {
+        const healer = state.selected && CLASSES[state.selected.classId]?.heal;
+        const color = healer
+          ? `rgba(120, 220, 160, ${pulse})`
+          : state.mode === 'ultimate'
+            ? `rgba(80, 230, 160, ${pulse})`
+            : state.mode === 'skill'
+              ? `rgba(120, 170, 255, ${pulse})`
+              : `rgba(210, 70, 60, ${pulse})`;
+        fillDiamond(color);
       }
     }
 
-    if (state.selected) {
+    if (state.selected && state.selected.x === x && state.selected.y === y) {
       ctx.strokeStyle = '#f0c35c';
-      ctx.lineWidth = 3;
-      ctx.strokeRect(
-        state.selected.x * TILE + 3,
-        state.selected.y * TILE + 3,
-        TILE - 6,
-        TILE - 6
-      );
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.moveTo(d.top.x, d.top.y);
+      ctx.lineTo(d.right.x, d.right.y);
+      ctx.lineTo(d.bottom.x, d.bottom.y);
+      ctx.lineTo(d.left.x, d.left.y);
+      ctx.closePath();
+      ctx.stroke();
     }
   }
 
-  drawUnits(state) {
-    const { ctx } = this;
-    for (const unit of state.units) {
-      if (!unit.alive) continue;
-      const cls = CLASSES[unit.classId];
-      const ufx = this.unitFx.get(unit.id);
-      let ox = ufx?.dx || 0;
-      let oy = ufx?.dy || 0;
-      if (ufx?.shake > 0) {
-        ox += (Math.random() - 0.5) * 8;
-        oy += (Math.random() - 0.5) * 8;
-      }
-      const cx = unit.x * TILE + TILE / 2 + ox;
-      const cy = unit.y * TILE + TILE / 2 + oy;
-      const dim = unit.team === 'player' && unit.acted ? 0.45 : 1;
-
-      ctx.fillStyle = 'rgba(0,0,0,0.28)';
-      ctx.beginPath();
-      ctx.ellipse(cx, cy + 18, 16, 6, 0, 0, Math.PI * 2);
-      ctx.fill();
-
-      ctx.globalAlpha = dim;
-      const grad = ctx.createRadialGradient(cx - 4, cy - 6, 2, cx, cy, 20);
-      grad.addColorStop(0, '#ffffff');
-      grad.addColorStop(0.15, cls.color);
-      grad.addColorStop(1, shade(cls.color, -40));
-      ctx.fillStyle = grad;
-      ctx.beginPath();
-      ctx.arc(cx, cy, 18, 0, Math.PI * 2);
-      ctx.fill();
-
-      ctx.lineWidth = 3;
-      ctx.strokeStyle = unit.team === 'player' ? '#f0c35c' : '#c4453a';
-      ctx.stroke();
-      if (unit.isBoss) {
-        ctx.lineWidth = 2;
-        ctx.strokeStyle = '#f0c35c';
-        ctx.beginPath();
-        ctx.arc(cx, cy, 22, 0, Math.PI * 2);
-        ctx.stroke();
-      }
-
-      if (ufx?.flash > 0) {
-        ctx.globalAlpha = Math.min(0.7, ufx.flash * 2.5) * dim;
-        ctx.fillStyle = '#ffffff';
-        ctx.beginPath();
-        ctx.arc(cx, cy, 18, 0, Math.PI * 2);
-        ctx.fill();
-      }
-
-      ctx.globalAlpha = dim;
-      ctx.fillStyle = 'rgba(10, 16, 12, 0.85)';
-      ctx.font = 'bold 13px "Noto Sans KR", sans-serif';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(glyph(cls.id), cx, cy + 1);
-
-      const barW = 34;
-      const ratio = unit.hp / unit.maxHp;
-      ctx.fillStyle = 'rgba(0,0,0,0.45)';
-      ctx.fillRect(cx - barW / 2, cy + 22, barW, 5);
-      ctx.fillStyle = unit.team === 'player' ? '#6ecf8e' : '#e07a70';
-      ctx.fillRect(cx - barW / 2, cy + 22, barW * ratio, 5);
-
-      ctx.globalAlpha = 1;
+  _drawUnitAt(ctx, state, unit) {
+    const cls = CLASSES[unit.classId];
+    const ufx = this.unitFx.get(unit.id);
+    let ox = ufx?.dx || 0;
+    let oy = (ufx?.dy || 0) - (ufx?.lift || 0);
+    if (ufx?.shake > 0) {
+      ox += (Math.random() - 0.5) * 6;
+      oy += (Math.random() - 0.5) * 6;
     }
+    const p = this.screenPos(state.map, unit.x, unit.y, ox, oy);
+    const dim = unit.team === 'player' && unit.acted ? 0.5 : 1;
+    this._drawUnitSprite(ctx, unit, cls, p.cx, p.cy, dim, ufx);
+  }
+
+  _drawUnitSprite(ctx, unit, cls, cx, cy, dim, ufx) {
+    ctx.save();
+    ctx.globalAlpha = dim;
+
+    // 캐릭터 투영 그림자 (남동 방향)
+    ctx.fillStyle = 'rgba(0,0,0,0.35)';
+    ctx.beginPath();
+    ctx.ellipse(cx + 8, cy + 18, 16, 6, -0.4, 0, Math.PI * 2);
+    ctx.fill();
+
+    // 다리 (음영)
+    ctx.fillStyle = shade(cls.color, -50);
+    ctx.fillRect(cx - 6, cy + 4, 4, 11);
+    ctx.fillStyle = shade(cls.color, -35);
+    ctx.fillRect(cx + 2, cy + 4, 4, 11);
+
+    // 몸통 — 좌측 밝게 / 우측 어둡게
+    const bodyG = ctx.createLinearGradient(cx - 12, cy - 10, cx + 12, cy + 8);
+    bodyG.addColorStop(0, shade(cls.color, 45));
+    bodyG.addColorStop(0.4, cls.color);
+    bodyG.addColorStop(1, shade(cls.color, -40));
+    ctx.fillStyle = bodyG;
+    roundRect(ctx, cx - 10, cy - 10, 20, 18, 4);
+    ctx.fill();
+    // 몸 자체 그림자
+    ctx.fillStyle = 'rgba(0,0,0,0.18)';
+    ctx.fillRect(cx + 2, cy - 8, 7, 14);
+
+    // 머리
+    const headG = ctx.createRadialGradient(cx - 3, cy - 20, 1, cx, cy - 18, 10);
+    headG.addColorStop(0, '#ffe8d2');
+    headG.addColorStop(0.6, '#e0a878');
+    headG.addColorStop(1, '#a87048');
+    ctx.fillStyle = headG;
+    ctx.beginPath();
+    ctx.arc(cx, cy - 18, 8.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = 'rgba(0,0,0,0.15)';
+    ctx.beginPath();
+    ctx.arc(cx + 2, cy - 16, 8.5, -0.4, 1.2);
+    ctx.fill();
+
+    if (cls.id === 'knight') {
+      ctx.fillStyle = shade(cls.color, 15);
+      ctx.fillRect(cx - 9, cy - 27, 18, 5);
+      ctx.fillRect(cx - 3, cy - 31, 6, 5);
+    } else if (cls.id === 'archer') {
+      ctx.strokeStyle = '#8b5a2b';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(cx + 11, cy - 2, 9, -1.1, 1.1);
+      ctx.stroke();
+    } else if (cls.id === 'mage') {
+      ctx.fillStyle = '#e8d080';
+      ctx.fillRect(cx + 9, cy - 22, 3, 26);
+      ctx.beginPath();
+      ctx.arc(cx + 10.5, cy - 24, 4, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (cls.id === 'fighter') {
+      ctx.fillStyle = '#c0c0c8';
+      ctx.beginPath();
+      ctx.moveTo(cx - 15, cy - 4);
+      ctx.lineTo(cx - 5, cy + 2);
+      ctx.lineTo(cx - 13, cy + 5);
+      ctx.fill();
+    } else if (cls.id === 'cleric') {
+      ctx.fillStyle = '#fff8e0';
+      ctx.beginPath();
+      ctx.moveTo(cx, cy - 32);
+      ctx.lineTo(cx + 7, cy - 22);
+      ctx.lineTo(cx - 7, cy - 22);
+      ctx.closePath();
+      ctx.fill();
+      ctx.strokeStyle = '#d4a84b';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(cx, cy - 28);
+      ctx.lineTo(cx, cy - 18);
+      ctx.moveTo(cx - 4, cy - 24);
+      ctx.lineTo(cx + 4, cy - 24);
+      ctx.stroke();
+    }
+
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = unit.team === 'player' ? '#f0c35c' : '#c4453a';
+    ctx.beginPath();
+    ctx.ellipse(cx, cy + 16, 12, 4.5, 0, 0, Math.PI * 2);
+    ctx.stroke();
+
+    if (unit.isBoss) {
+      ctx.setLineDash([3, 3]);
+      ctx.strokeStyle = '#f0c35c';
+      ctx.beginPath();
+      ctx.ellipse(cx, cy + 16, 16, 6, 0, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    if (ufx?.flash > 0) {
+      ctx.globalAlpha = Math.min(0.7, ufx.flash * 2.5) * dim;
+      ctx.fillStyle = '#fff';
+      roundRect(ctx, cx - 12, cy - 30, 24, 46, 8);
+      ctx.fill();
+    }
+
+    ctx.globalAlpha = dim;
+    const barW = 30;
+    const ratio = unit.hp / unit.maxHp;
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.fillRect(cx - barW / 2, cy + 22, barW, 4);
+    ctx.fillStyle = unit.team === 'player' ? '#6ecf8e' : '#e07a70';
+    ctx.fillRect(cx - barW / 2, cy + 22, barW * ratio, 4);
+
+    ctx.fillStyle = 'rgba(10,16,12,0.8)';
+    ctx.font = 'bold 10px "Noto Sans KR", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(glyph(cls.id), cx, cy - 1);
+    ctx.restore();
   }
 
   drawAttacks() {
     const { ctx } = this;
     for (const a of this.attacks) {
       const p = 1 - a.life / a.maxLife;
-      if (a.kind === 'slash') this._drawSlash(ctx, a, p);
+      if (a.kind === 'heal' || a.kind === 'bless') this._drawHeal(ctx, a, p);
+      else if (a.kind === 'slash') this._drawSlash(ctx, a, p);
       else if (a.kind === 'arrow') this._drawArrow(ctx, a, p);
-      else this._drawMagic(ctx, a, p);
+      else if (a.kind === 'magic') this._drawMagic(ctx, a, p);
+      else if (a.kind === 'bash') this._drawBash(ctx, a, p);
+      else if (a.kind === 'double') {
+        this._drawSlash(ctx, a, Math.min(1, p * 1.4));
+        if (p > 0.35) this._drawSlash(ctx, { ...a, ax: a.ax + 6 }, Math.min(1, (p - 0.35) * 1.5));
+      } else if (a.kind === 'pierce') this._drawPierce(ctx, a, p);
+      else if (a.kind === 'burst') this._drawBurst(ctx, a, p);
+      else if (a.kind === 'holy') this._drawHoly(ctx, a, p);
+      else if (a.kind === 'whirl') this._drawWhirl(ctx, a, p);
+      else if (a.kind === 'rain') this._drawRain(ctx, a, p);
+      else if (a.kind === 'nova') this._drawNova(ctx, a, p);
+      else this._drawSlash(ctx, a, p);
     }
+  }
+
+  _drawHeal(ctx, a, p) {
+    const t = Math.min(1, p / 0.7);
+    const x = a.ax + (a.dx - a.ax) * t;
+    const y = a.ay + (a.dy - a.ay) * t;
+    ctx.save();
+    for (let i = 0; i < 6; i++) {
+      const ang = (Math.PI * 2 * i) / 6 + this.animT * 3;
+      const r = 8 + t * 12;
+      ctx.fillStyle = `rgba(255, 240, 160, ${0.7 * (1 - t * 0.3)})`;
+      ctx.beginPath();
+      ctx.arc(x + Math.cos(ang) * r, y + Math.sin(ang) * r, 3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    const g = ctx.createRadialGradient(x, y, 2, x, y, 18);
+    g.addColorStop(0, '#fff');
+    g.addColorStop(0.4, '#ffe08a');
+    g.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(x, y, 16, 0, Math.PI * 2);
+    ctx.fill();
+    if (p > 0.55) {
+      const b = (p - 0.55) / 0.45;
+      ctx.globalAlpha = 1 - b;
+      ctx.strokeStyle = a.kind === 'bless' ? '#ffe9a0' : '#9f6';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(a.dx, a.dy, 10 + b * 36, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.restore();
   }
 
   _drawSlash(ctx, a, p) {
     const ang = Math.atan2(a.dy - a.ay, a.dx - a.ax);
-    // 스윙 진행 0~1
     const swing = Math.min(1, p / 0.7);
-    const start = ang - 1.1;
-    const end = ang - 1.1 + 2.2 * swing;
     const cx = (a.ax + a.dx) / 2;
     const cy = (a.ay + a.dy) / 2;
-    const r = 28;
-
     ctx.save();
     ctx.translate(cx, cy);
     ctx.lineCap = 'round';
-    ctx.strokeStyle = `rgba(255, 240, 180, ${0.85 * (1 - p * 0.3)})`;
+    ctx.strokeStyle = `rgba(255,240,180,0.85)`;
     ctx.lineWidth = 5;
     ctx.beginPath();
-    ctx.arc(0, 0, r, start, end);
+    ctx.arc(0, 0, 26, ang - 1.1, ang - 1.1 + 2.2 * swing);
     ctx.stroke();
-    ctx.strokeStyle = `rgba(255, 120, 80, ${0.7 * (1 - p * 0.2)})`;
-    ctx.lineWidth = 2.5;
-    ctx.beginPath();
-    ctx.arc(0, 0, r - 4, start, end);
-    ctx.stroke();
-
-    if (p > 0.55 && p < 0.9) {
-      const flash = 1 - Math.abs(p - 0.7) / 0.2;
-      ctx.globalAlpha = flash * 0.7;
-      ctx.fillStyle = '#fff6c8';
-      ctx.beginPath();
-      ctx.arc(a.dx - cx, a.dy - cy, 16, 0, Math.PI * 2);
-      ctx.fill();
-    }
     ctx.restore();
   }
 
@@ -370,15 +675,6 @@ export class Renderer {
     const x = a.ax + (a.dx - a.ax) * t;
     const y = a.ay + (a.dy - a.ay) * t;
     const ang = Math.atan2(a.dy - a.ay, a.dx - a.ax);
-
-    // trail
-    ctx.strokeStyle = `rgba(220, 240, 200, ${0.35 * (1 - t)})`;
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(a.ax, a.ay);
-    ctx.lineTo(x, y);
-    ctx.stroke();
-
     ctx.save();
     ctx.translate(x, y);
     ctx.rotate(ang);
@@ -388,91 +684,148 @@ export class Renderer {
     ctx.lineTo(-8, 4);
     ctx.lineTo(-5, 0);
     ctx.lineTo(-8, -4);
-    ctx.closePath();
     ctx.fill();
-    ctx.fillStyle = '#5a8f4a';
-    ctx.fillRect(-10, -1.5, 10, 3);
     ctx.restore();
-
-    if (p > 0.7 && p < 0.95) {
-      const flash = 1 - Math.abs(p - 0.8) / 0.15;
-      ctx.globalAlpha = flash * 0.65;
-      ctx.fillStyle = '#dfffc8';
-      ctx.beginPath();
-      ctx.arc(a.dx, a.dy, 14, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.globalAlpha = 1;
-    }
   }
 
   _drawMagic(ctx, a, p) {
     const t = Math.min(1, easeOut(p / 0.8));
     const x = a.ax + (a.dx - a.ax) * t;
     const y = a.ay + (a.dy - a.ay) * t;
-    const pulse = 0.5 + Math.sin(this.animT * 20) * 0.5;
-
-    // orbiting sparks along path
-    for (let i = 0; i < 5; i++) {
-      const tt = Math.max(0, t - i * 0.08);
-      const px = a.ax + (a.dx - a.ax) * tt;
-      const py = a.ay + (a.dy - a.ay) * tt;
-      ctx.globalAlpha = (1 - i * 0.18) * 0.55;
-      ctx.fillStyle = a.color;
-      ctx.beginPath();
-      ctx.arc(px, py, 5 - i * 0.6, 0, Math.PI * 2);
-      ctx.fill();
-    }
-
-    ctx.globalAlpha = 1;
-    const glow = ctx.createRadialGradient(x, y, 2, x, y, 16);
-    glow.addColorStop(0, '#ffffff');
+    const glow = ctx.createRadialGradient(x, y, 2, x, y, 14);
+    glow.addColorStop(0, '#fff');
     glow.addColorStop(0.4, a.color);
     glow.addColorStop(1, 'rgba(0,0,0,0)');
     ctx.fillStyle = glow;
     ctx.beginPath();
-    ctx.arc(x, y, 14 + pulse * 3, 0, Math.PI * 2);
+    ctx.arc(x, y, 14, 0, Math.PI * 2);
     ctx.fill();
+  }
 
-    ctx.fillStyle = '#fff';
+  _drawBash(ctx, a, p) {
+    const t = Math.min(1, p / 0.55);
+    const x = a.ax + (a.dx - a.ax) * t;
+    const y = a.ay + (a.dy - a.ay) * t;
+    ctx.fillStyle = 'rgba(180,200,230,0.85)';
     ctx.beginPath();
-    ctx.arc(x, y, 4, 0, Math.PI * 2);
+    ctx.ellipse(x, y, 12, 16, 0, 0, Math.PI * 2);
     ctx.fill();
+  }
 
-    if (p > 0.65) {
-      const burst = Math.min(1, (p - 0.65) / 0.25);
-      ctx.globalAlpha = (1 - burst) * 0.75;
-      ctx.strokeStyle = a.color;
-      ctx.lineWidth = 3;
+  _drawPierce(ctx, a, p) {
+    const t = Math.min(1, p / 0.7);
+    const x = a.ax + (a.dx - a.ax) * t * 1.1;
+    const y = a.ay + (a.dy - a.ay) * t * 1.1;
+    ctx.strokeStyle = 'rgba(180,255,200,0.55)';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(a.ax, a.ay);
+    ctx.lineTo(x, y);
+    ctx.stroke();
+  }
+
+  _drawBurst(ctx, a, p) {
+    this._drawMagic(ctx, a, p);
+  }
+
+  _drawHoly(ctx, a, p) {
+    this._drawSlash(ctx, a, p);
+    const glow = Math.sin(p * Math.PI);
+    ctx.globalAlpha = glow * 0.65;
+    const g = ctx.createRadialGradient(a.dx, a.dy, 4, a.dx, a.dy, 48);
+    g.addColorStop(0, '#fff8d0');
+    g.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(a.dx, a.dy, 48 * glow, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+
+  _drawWhirl(ctx, a, p) {
+    ctx.save();
+    ctx.translate(a.ax, a.ay);
+    ctx.rotate(p * Math.PI * 4);
+    ctx.strokeStyle = 'rgba(255,200,100,0.7)';
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.arc(0, 0, 22, 0, 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  _drawRain(ctx, a, p) {
+    for (let i = 0; i < 10; i++) {
+      const delay = (i % 5) * 0.05;
+      const t = Math.min(1, Math.max(0, (p - delay) / 0.55));
+      if (t <= 0) continue;
+      const ox = ((i * 37) % 36) - 18;
+      const y = a.dy - 60 + 60 * t;
+      ctx.fillStyle = 'rgba(200,255,210,0.7)';
+      ctx.fillRect(a.dx + ox, y, 2, 10);
+    }
+  }
+
+  _drawNova(ctx, a, p) {
+    const charge = Math.min(1, p / 0.35);
+    ctx.strokeStyle = 'rgba(80,255,160,0.8)';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(a.ax, a.ay, 8 + charge * 20, 0, Math.PI * 2);
+    ctx.stroke();
+    if (p > 0.35) {
+      const t = (p - 0.35) / 0.65;
+      const x = a.ax + (a.dx - a.ax) * Math.min(1, t * 1.3);
+      const y = a.ay + (a.dy - a.ay) * Math.min(1, t * 1.3);
+      const g = ctx.createRadialGradient(x, y, 2, x, y, 18);
+      g.addColorStop(0, '#fff');
+      g.addColorStop(0.3, '#5dffb0');
+      g.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = g;
       ctx.beginPath();
-      ctx.arc(a.dx, a.dy, 8 + burst * 28, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.globalAlpha = 1;
+      ctx.arc(x, y, 16, 0, Math.PI * 2);
+      ctx.fill();
+      if (t > 0.45) {
+        const blast = (t - 0.45) / 0.55;
+        ctx.globalAlpha = 1 - blast;
+        ctx.strokeStyle = '#3dff9a';
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.arc(a.dx, a.dy, 12 + blast * 50, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+      }
     }
   }
 
   drawHover(state) {
-    if (!this.hover) return;
+    if (!this.hover || !state.map) return;
     const { x, y } = this.hover;
     if (x < 0 || y < 0 || x >= COLS || y >= ROWS) return;
     const { ctx } = this;
-    ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+    const elev = elevAt(state.map, x, y);
+    const { sx, sy } = toScreen(x, y, elev, this._origin.ox, this._origin.oy);
+    const d = diamondPoints(sx, sy);
+    ctx.strokeStyle = 'rgba(255,255,255,0.5)';
     ctx.lineWidth = 2;
-    ctx.strokeRect(x * TILE + 1, y * TILE + 1, TILE - 2, TILE - 2);
+    ctx.beginPath();
+    ctx.moveTo(d.top.x, d.top.y);
+    ctx.lineTo(d.right.x, d.right.y);
+    ctx.lineTo(d.bottom.x, d.bottom.y);
+    ctx.lineTo(d.left.x, d.left.y);
+    ctx.closePath();
+    ctx.stroke();
 
     const terrain = TERRAIN[state.map[y][x]];
     const unit = state.units.find((u) => u.alive && u.x === x && u.y === y);
     const label = unit
-      ? `${unit.name} / ${terrain.name}`
-      : `${terrain.name}  방어+${terrain.defBonus}`;
-
+      ? `${unit.name} / ${terrain.name} (고도 ${terrain.elev})`
+      : `${terrain.name}  방어+${terrain.defBonus}  고도 ${terrain.elev}`;
     ctx.font = '12px "Noto Sans KR", sans-serif';
     const tw = ctx.measureText(label).width + 16;
-    let lx = x * TILE + 8;
-    let ly = y * TILE - 10;
-    if (ly < 16) ly = y * TILE + TILE + 16;
-    if (lx + tw > COLS * TILE) lx = COLS * TILE - tw - 4;
-
-    ctx.fillStyle = 'rgba(10, 18, 14, 0.88)';
+    let lx = sx - tw / 2;
+    let ly = sy - ISO_H / 2 - 14;
+    ctx.fillStyle = 'rgba(10,18,14,0.9)';
     roundRect(ctx, lx, ly - 14, tw, 22, 6);
     ctx.fill();
     ctx.fillStyle = '#e7f0e8';
@@ -493,7 +846,7 @@ export class Renderer {
         ctx.fill();
       } else {
         ctx.fillStyle = f.color;
-        ctx.font = 'bold 18px "Cinzel", "Noto Sans KR", sans-serif';
+        ctx.font = 'bold 17px "Cinzel", "Noto Sans KR", sans-serif';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillText(f.text, f.x, f.y);
@@ -504,7 +857,7 @@ export class Renderer {
 }
 
 function glyph(classId) {
-  return { knight: '기', fighter: '전', archer: '궁', mage: '마' }[classId] || '?';
+  return { knight: '기', fighter: '전', archer: '궁', mage: '마', cleric: '성' }[classId] || '?';
 }
 
 function shade(hex, amt) {

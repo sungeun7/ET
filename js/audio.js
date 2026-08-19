@@ -113,8 +113,9 @@ class SoundManager {
   }
 
   move() {
-    this._noise(0.05, 0.05, 900);
-    this._tone(240, 0.08, 'triangle', 0.05, 180);
+    this._noise(0.04, 0.045, 1100);
+    this._tone(220, 0.07, 'triangle', 0.045, 160);
+    setTimeout(() => this._noise(0.035, 0.035, 900), 55);
   }
 
   attack(isMagic = false) {
@@ -126,6 +127,20 @@ class SoundManager {
       this._noise(0.07, 0.1, 700);
       this._tone(180, 0.09, 'sawtooth', 0.07, 90);
     }
+  }
+
+  skill() {
+    this._tone(392, 0.1, 'triangle', 0.08);
+    setTimeout(() => this._tone(523, 0.12, 'triangle', 0.07), 50);
+    setTimeout(() => this._tone(659, 0.14, 'sine', 0.06), 110);
+    setTimeout(() => this._noise(0.12, 0.07, 1600), 80);
+  }
+
+  ultimate() {
+    this._chord([262, 330, 392], 0.18, 'sawtooth', 0.05);
+    setTimeout(() => this._chord([523, 659, 784], 0.28, 'triangle', 0.08), 120);
+    setTimeout(() => this._tone(1046, 0.35, 'sine', 0.07, 1318), 220);
+    setTimeout(() => this._noise(0.22, 0.1, 2400), 180);
   }
 
   hit() {
@@ -173,13 +188,39 @@ class SoundManager {
     setTimeout(() => this._tone(660, 0.15, 'triangle', 0.06), 120);
   }
 
+  briefing() {
+    this._tone(294, 0.14, 'sine', 0.05);
+    setTimeout(() => this._tone(370, 0.16, 'sine', 0.05), 90);
+    setTimeout(() => this._tone(440, 0.2, 'triangle', 0.06), 180);
+  }
+
   endTurn() {
     this._tone(360, 0.08, 'square', 0.05);
     setTimeout(() => this._tone(280, 0.1, 'square', 0.045), 70);
   }
 
+  heal() {
+    this._tone(523, 0.1, 'sine', 0.06);
+    setTimeout(() => this._tone(659, 0.12, 'sine', 0.055), 60);
+    setTimeout(() => this._tone(784, 0.16, 'triangle', 0.05), 130);
+  }
+
+  itemUse() {
+    this._tone(440, 0.08, 'triangle', 0.06);
+    setTimeout(() => this._tone(554, 0.1, 'triangle', 0.05), 50);
+  }
+
+  equip() {
+    this._tone(300, 0.06, 'square', 0.05);
+    setTimeout(() => this._tone(450, 0.08, 'square', 0.045), 40);
+  }
+
   wait() {
     this._tone(300, 0.06, 'triangle', 0.04);
+  }
+
+  hoverTile() {
+    this._tone(880, 0.03, 'sine', 0.02);
   }
 }
 

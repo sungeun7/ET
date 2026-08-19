@@ -27,7 +27,13 @@
 
     <main class="layout">
       <section class="stage-wrap">
-        <canvas id="gameCanvas" width="960" height="640" aria-label="전투 맵"></canvas>
+        <canvas id="gameCanvas" width="960" height="668" aria-label="전투 맵"></canvas>
+        <div class="action-bar" id="actionBar" hidden>
+          <button type="button" id="btnNormal" class="btn btn-ghost action-btn active">일반 공격</button>
+          <button type="button" id="btnSkill" class="btn btn-ghost action-btn">스킬</button>
+          <button type="button" id="btnUlt" class="btn btn-ghost action-btn action-ult">필살기</button>
+          <button type="button" id="btnWaitUnit" class="btn btn-ghost action-btn">대기</button>
+        </div>
         <div class="banner" id="phaseBanner" hidden></div>
         <div class="overlay" id="titleOverlay">
           <div class="title-card">
@@ -38,9 +44,9 @@
               산과 숲과 거센 파도를 건너, 빛의 문 앞에서 검은 왕과 맞서리라.
             </p>
             <ul class="how-to">
-              <li>유닛 클릭 → 이동 가능 칸 표시</li>
-              <li>노란 칸으로 이동 후 빨간 칸의 적 공격</li>
-              <li>5스테이지마다 관문 보스, 스테이지가 오를수록 적 강화</li>
+              <li>유닛 선택 후 적 클릭 → 자동 이동·공격</li>
+              <li>성직자 엘라로 아군 치유 · 사이드바에서 아이템 사용·장착</li>
+              <li>스킬·필살기 스테이지당 1회 · 클리어 시 전리품</li>
             </ul>
             <p class="credit">서사 모티프 영감 · Rhapsody「Emerald Sword」(가사 미인용)</p>
             <button type="button" id="btnStart" class="btn btn-gold btn-lg">여정 시작</button>
@@ -75,11 +81,16 @@
         <div class="panel">
           <h3>병종</h3>
           <ul class="class-list">
-            <li><span class="dot knight"></span>기사 — 높은 방어 / 근접</li>
-            <li><span class="dot archer"></span>궁수 — 원거리 2칸</li>
-            <li><span class="dot mage"></span>마법사 — 마법 공격</li>
-            <li><span class="dot fighter"></span>전사 — 균형형</li>
+            <li><span class="dot knight"></span>기사 — 방패 강타 / 성광의 돌격</li>
+            <li><span class="dot archer"></span>궁수 — 관통사 / 유성 화살비</li>
+            <li><span class="dot mage"></span>마법사 — 마력 폭발 / 에메랄드 작렬</li>
+            <li><span class="dot fighter"></span>전사 — 연속 참격 / 광풍 회전참</li>
+            <li><span class="dot cleric"></span>성직자 — 치유의 빛 / 신성 축복</li>
           </ul>
+        </div>
+        <div class="panel">
+          <h3>소지품</h3>
+          <div id="inventoryPanel" class="inventory-panel"></div>
         </div>
         <div class="panel log-panel">
           <h3>전투 기록</h3>

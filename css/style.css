@@ -144,6 +144,42 @@ body::before {
   background: #1a2c22;
 }
 
+.action-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+  padding: 10px 12px;
+  background: linear-gradient(180deg, rgba(16, 30, 23, 0.95), rgba(12, 22, 17, 0.98));
+  border-top: 1px solid rgba(212, 168, 75, 0.25);
+}
+
+.action-bar[hidden] {
+  display: none !important;
+}
+
+.action-btn {
+  font-size: 0.85rem;
+  padding: 8px 12px;
+}
+
+.action-btn.active {
+  border-color: rgba(240, 195, 92, 0.7);
+  color: var(--gold-strong);
+  background: rgba(240, 195, 92, 0.12);
+}
+
+.action-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.action-ult.active {
+  border-color: rgba(80, 230, 160, 0.7);
+  color: #7dffc0;
+  background: rgba(80, 230, 160, 0.12);
+}
+
 .sidebar {
   display: flex;
   flex-direction: column;
@@ -310,6 +346,63 @@ body::before {
 .dot.archer { background: #5fb87a; }
 .dot.mage { background: #c78be0; }
 .dot.fighter { background: #d4a84b; }
+.dot.cleric { background: #e8d48a; }
+
+.inventory-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 220px;
+  overflow: auto;
+}
+
+.inv-empty {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.inv-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.inv-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.inv-info strong {
+  font-size: 0.85rem;
+}
+
+.inv-info span {
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.inv-btns {
+  flex-shrink: 0;
+}
+
+.btn-xs {
+  padding: 4px 8px;
+  font-size: 0.72rem;
+}
+
+.equip-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
 
 .battle-log {
   max-height: 180px;
