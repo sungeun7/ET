@@ -1,18 +1,20 @@
 import { CLASSES, TERRAIN } from './data.js';
 import { TOTAL_STAGES } from './stages.js';
-import { previewCombat, previewHeal } from './combat.js';
 import { getDefeatText, getStageStory, getVictoryText } from './story.js';
-import { canUseSkill, canUseUlt, getSkill, getUlt, isHealAction, strikeMult } from './skills.js';
+import { canUseSkill, canUseUlt, getSkill, getUlt } from './skills.js';
 import { ITEMS, effectiveStat, listInventory } from './items.js';
+import { xpToNext } from './xp.js';
 
 export class UI {
   constructor() {
     this.unitPanel = document.getElementById('unitPanel');
-    this.combatPreview = document.getElementById('combatPreview');
-    this.battleLog = document.getElementById('battleLog');
     this.phaseLabel = document.getElementById('phaseLabel');
     this.phaseBanner = document.getElementById('phaseBanner');
+    this.narrationBanner = document.getElementById('narrationBanner');
+    this.narrationTitle = document.getElementById('narrationTitle');
+    this.narrationBody = document.getElementById('narrationBody');
     this.titleOverlay = document.getElementById('titleOverlay');
+    this._narrationTimer = null;
     this.briefingOverlay = document.getElementById('briefingOverlay');
     this.briefingAct = document.getElementById('briefingAct');
     this.briefingTitle = document.getElementById('briefingTitle');
@@ -58,12 +60,14 @@ export class UI {
     this.actionBar.hidden = false;
     const skill = getSkill(unit);
     const ult = getUlt(unit);
-    this.btnSkill.textContent = skill ? `스킬 · ${skill.name}` : '스킬';
-    this.btnUlt.textContent = ult ? `필살기 · ${ult.name}` : '필살기';
+    const sCost = skill?.mpCost ?? 0;
+    const uCost = ult?.mpCost ?? 0;
+    this.btnSkill.textContent = skill ? `스킬 · ${skill.name} (MP${sCost})` : '스킬';
+    this.btnUlt.textContent = ult ? `필살기 · ${ult.name} (MP${uCost})` : '필살기';
     this.btnSkill.disabled = !canUseSkill(unit);
     this.btnUlt.disabled = !canUseUlt(unit);
-    this.btnSkill.title = skill?.desc || '';
-    this.btnUlt.title = ult?.desc || '';
+    this.btnSkill.title = skill ? `${skill.desc} · 소모 MP ${sCost}` : '';
+    this.btnUlt.title = ult ? `${ult.desc} · 소모 MP ${uCost}` : '';
     this.btnNormal.textContent = CLASSES[unit.classId].heal ? '치유' : '일반 공격';
     this.setActionMode(mode);
   }
@@ -139,19 +143,38 @@ export class UI {
     this.phaseBanner.classList.add('show');
   }
 
-  log(message, type = '') {
-    const el = document.createElement('div');
-    el.className = `entry ${type}`.trim();
-    el.textContent = message;
-    this.battleLog.prepend(el);
-    while (this.battleLog.children.length > 40) {
-      this.battleLog.lastChild.remove();
+  /** 스테이지 서사 등 — 맵 중앙에 잠시 표시 후 사라짐 */
+  showNarration(title, body = '', { duration = 3400, xp = false } = {}) {
+    if (!this.narrationBanner) return;
+    if (this._narrationTimer) {
+      clearTimeout(this._narrationTimer);
+      this._narrationTimer = null;
     }
+    this.narrationBanner.hidden = false;
+    this.narrationBanner.classList.toggle('xp', !!xp);
+    this.narrationTitle.textContent = title;
+    this.narrationBody.textContent = body;
+    this.narrationBody.hidden = !body;
+    this.narrationBanner.classList.remove('show');
+    void this.narrationBanner.offsetWidth;
+    this.narrationBanner.classList.add('show');
+    this._narrationTimer = setTimeout(() => {
+      this.narrationBanner.classList.remove('show', 'xp');
+      this.narrationBanner.hidden = true;
+      this._narrationTimer = null;
+    }, duration);
   }
 
-  clearLog() {
-    this.battleLog.innerHTML = '';
+  /** 경험치·레벨업 중앙 표시 */
+  showXp(title, body = '') {
+    this.showNarration(title, body, { duration: 2100, xp: true });
   }
+
+  log(_message, _type = '') {
+    // 전투 기록 패널 제거 — 중앙 연출(showXp 등)만 사용
+  }
+
+  clearLog() {}
 
   renderUnit(unit, map) {
     if (!unit) {
@@ -162,6 +185,10 @@ export class UI {
     const cls = CLASSES[unit.classId];
     const terrain = TERRAIN[map[unit.y][unit.x]];
     const pct = Math.max(0, unit.hp / unit.maxHp);
+    const mpPct = Math.max(0, (unit.mp ?? 0) / Math.max(1, unit.maxMp || 1));
+    const need = xpToNext(unit.level || 1);
+    const xp = unit.xp ?? 0;
+    const xpPct = unit.team === 'player' ? Math.max(0, Math.min(1, xp / need)) : 0;
     const bossTag = unit.isBoss ? ' · BOSS' : '';
     const wpn = unit.equip?.weapon ? ITEMS[unit.equip.weapon]?.name : '없음';
     const arm = unit.equip?.armor ? ITEMS[unit.equip.armor]?.name : '없음';
@@ -169,14 +196,24 @@ export class UI {
     this.unitPanel.innerHTML = `
       <p class="unit-name">${unit.name}</p>
       <p class="unit-meta">Lv.${unit.level} ${cls.name}${bossTag} · ${unit.team === 'player' ? '아군' : '적군'} · ${terrain.name}</p>
+      <div class="bar-label"><span>HP</span><strong>${unit.hp}/${unit.maxHp}</strong></div>
       <div class="hp-bar ${unit.team === 'enemy' ? 'enemy' : ''}"><i style="transform:scaleX(${pct})"></i></div>
+      <div class="bar-label"><span>MP</span><strong>${unit.mp ?? 0}/${unit.maxMp ?? 0}</strong></div>
+      <div class="mp-bar"><i style="transform:scaleX(${mpPct})"></i></div>
+      ${
+        unit.team === 'player'
+          ? `<div class="bar-label"><span>EXP</span><strong>${xp}/${need}</strong></div>
+             <div class="xp-bar"><i style="transform:scaleX(${xpPct})"></i></div>`
+          : ''
+      }
       <div class="stat-grid">
-        <div class="stat-row"><span>HP</span><strong>${unit.hp}/${unit.maxHp}</strong></div>
         <div class="stat-row"><span>이동</span><strong>${cls.move}</strong></div>
         <div class="stat-row"><span>공격</span><strong>${effectiveStat(unit, 'atk')}</strong></div>
         <div class="stat-row"><span>마법</span><strong>${effectiveStat(unit, 'mag')}</strong></div>
         <div class="stat-row"><span>방어</span><strong>${effectiveStat(unit, 'def')}</strong></div>
         <div class="stat-row"><span>마방</span><strong>${effectiveStat(unit, 'res')}</strong></div>
+        <div class="stat-row"><span>스킬</span><strong>MP${cls.skill?.mpCost ?? 0}</strong></div>
+        <div class="stat-row"><span>필살기</span><strong>MP${cls.ult?.mpCost ?? 0}</strong></div>
         <div class="stat-row"><span>무기</span><strong>${wpn}</strong></div>
         <div class="stat-row"><span>방어구</span><strong>${arm}</strong></div>
       </div>
@@ -191,37 +228,8 @@ export class UI {
     `;
   }
 
-  renderCombatPreview(attacker, defender, map, kind = 'normal') {
-    if (!attacker || !defender) {
-      this.combatPreview.className = 'combat-preview empty';
-      this.combatPreview.textContent = '대상을 지정하면 표시됩니다';
-      return;
-    }
-    const mult = strikeMult(attacker, kind);
-    if (isHealAction(attacker, kind)) {
-      const h = previewHeal(attacker, defender, mult);
-      this.combatPreview.className = 'combat-preview';
-      this.combatPreview.innerHTML = `
-        <p class="unit-meta">${attacker.name} → ${defender.name} (치유)</p>
-        <div class="stat-grid">
-          <div class="stat-row"><span>예상 회복</span><strong>+${h.heal}</strong></div>
-          <div class="stat-row"><span>배율</span><strong>×${mult}</strong></div>
-        </div>
-      `;
-      return;
-    }
-    const p = previewCombat(attacker, defender, map, mult);
-    const label = kind === 'skill' ? '스킬' : kind === 'ultimate' ? '필살기' : '일반';
-    this.combatPreview.className = 'combat-preview';
-    this.combatPreview.innerHTML = `
-      <p class="unit-meta">${attacker.name} → ${defender.name} (${label})</p>
-      <div class="stat-grid">
-        <div class="stat-row"><span>예상 피해</span><strong>${p.est}</strong></div>
-        <div class="stat-row"><span>배율</span><strong>×${mult}</strong></div>
-        <div class="stat-row"><span>속성</span><strong>${p.isMagic ? '마법' : '물리'}</strong></div>
-        <div class="stat-row"><span>반격</span><strong>${p.counter ? `약 ${p.counterEst}` : '불가'}</strong></div>
-      </div>
-    `;
+  renderCombatPreview() {
+    /* 전투 미리보기 패널 제거됨 */
   }
 
   renderInventory(inv, selectedUnit) {

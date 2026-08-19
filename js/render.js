@@ -31,9 +31,9 @@ export class Renderer {
     this.hover = tile;
   }
 
-  pickTile(px, py, map) {
+  pickTile(px, py, map, units = null) {
     this._syncOrigin();
-    return fromScreen(px, py, map, this._origin.ox, this._origin.oy);
+    return fromScreen(px, py, map, this._origin.ox, this._origin.oy, units);
   }
 
   screenPos(map, x, y, ox = 0, oy = 0) {
@@ -584,12 +584,18 @@ export class Renderer {
     }
 
     ctx.globalAlpha = dim;
-    const barW = 30;
-    const ratio = unit.hp / unit.maxHp;
+    // 체력바 — 머리 위
+    const barW = 28;
+    const barH = 4;
+    const headTop = cls.id === 'cleric' || cls.id === 'knight' ? cy - 36 : cy - 30;
+    const ratio = Math.max(0, unit.hp / unit.maxHp);
     ctx.fillStyle = 'rgba(0,0,0,0.55)';
-    ctx.fillRect(cx - barW / 2, cy + 22, barW, 4);
+    ctx.fillRect(cx - barW / 2, headTop - barH, barW, barH);
     ctx.fillStyle = unit.team === 'player' ? '#6ecf8e' : '#e07a70';
-    ctx.fillRect(cx - barW / 2, cy + 22, barW * ratio, 4);
+    ctx.fillRect(cx - barW / 2, headTop - barH, barW * ratio, barH);
+    ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(cx - barW / 2 + 0.5, headTop - barH + 0.5, barW - 1, barH - 1);
 
     ctx.fillStyle = 'rgba(10,16,12,0.8)';
     ctx.font = 'bold 10px "Noto Sans KR", sans-serif';

@@ -17,8 +17,11 @@ import {
   canUseUlt,
   isAoeHeal,
   isHealAction,
+  regenMp,
+  spendMp,
   strikeFx,
   strikeLabel,
+  strikeMpCost,
   strikeMult,
 } from './skills.js';
 import {
@@ -29,6 +32,12 @@ import {
   listInventory,
   rewardsForStage,
 } from './items.js';
+import {
+  applyProgressToUnit,
+  createRosterProgress,
+  grantKillXp,
+  syncProgressFromUnits,
+} from './xp.js';
 
 export class Game {
   constructor(canvas) {
@@ -40,6 +49,7 @@ export class Game {
     this.stageNo = 1;
     this.strikeKind = 'normal';
     this.inventory = { ...STARTER_INVENTORY };
+    this.rosterProgress = createRosterProgress();
     this.state = this.createInitialState(1, false);
     this._bindUi();
     this._bindCanvas();
@@ -56,14 +66,21 @@ export class Game {
 
   createInitialState(stageNo, started = false) {
     const stage = getStage(stageNo);
+    const units = stage.units.map((u) => {
+      const copy = {
+        ...u,
+        equip: { ...(u.equip || { weapon: null, armor: null }) },
+        xp: u.xp ?? 0,
+      };
+      if (copy.team === 'player') applyProgressToUnit(copy, this.rosterProgress);
+      else if (copy.xp == null) copy.xp = 0;
+      return copy;
+    });
     return {
       stageNo,
       stage,
       map: buildMap(stage.layout),
-      units: stage.units.map((u) => ({
-        ...u,
-        equip: { ...(u.equip || { weapon: null, armor: null }) },
-      })),
+      units,
       phase: 'player',
       mode: 'idle',
       selected: null,
@@ -82,6 +99,7 @@ export class Game {
       await this._unlockAudio();
       sfx.uiClick();
       this.inventory = { ...STARTER_INVENTORY };
+      this.rosterProgress = createRosterProgress();
       this.openStage(1);
     });
     document.getElementById('btnBriefing').addEventListener('click', async () => {
@@ -131,10 +149,8 @@ export class Game {
     document.getElementById('btnWaitUnit').addEventListener('click', async () => {
       await this._unlockAudio();
       if (!this.state.selected || this.busy) return;
-      const name = this.state.selected.name;
       sfx.wait();
       this.finishUnit(this.state.selected);
-      this.ui.log(`${name}이(가) 대기합니다.`);
     });
 
     document.getElementById('inventoryPanel').addEventListener('click', async (e) => {
@@ -176,8 +192,7 @@ export class Game {
     this.canvas.addEventListener('contextmenu', async (e) => {
       e.preventDefault();
       await this._unlockAudio();
-      if (this.state.selected) sfx.cancel();
-      this.cancelAction();
+      this.onRightClick(e);
     });
   }
 
@@ -209,8 +224,7 @@ export class Game {
     sfx.startBattle();
     setTimeout(() => sfx.phasePlayer(), 180);
     const story = getStageStory(this.state.stage);
-    this.ui.log(`스테이지 ${this.stageNo} — ${story.title}`, 'phase');
-    this.ui.log(story.body, 'phase');
+    this.ui.showNarration(`스테이지 ${this.stageNo} — ${story.title}`, story.body);
   }
 
   restartStage() {
@@ -219,6 +233,7 @@ export class Game {
 
   onResultAction() {
     if (this.state.result === 'win') {
+      this.rosterProgress = syncProgressFromUnits(this.rosterProgress, this.state.units);
       const gains = rewardsForStage(this.stageNo);
       this.inventory = addToInventory(this.inventory, gains);
       const names = Object.entries(gains)
@@ -233,6 +248,7 @@ export class Game {
       this.ui.showTitle();
       this.stageNo = 1;
       this.inventory = { ...STARTER_INVENTORY };
+      this.rosterProgress = createRosterProgress();
       this.state = this.createInitialState(1, false);
       this.ui.setStageInfo(getStage(1));
       this.ui.renderInventory(this.inventory, null);
@@ -251,11 +267,18 @@ export class Game {
 
   tileFromEvent(e) {
     const rect = this.canvas.getBoundingClientRect();
-    const scaleX = this.canvas.width / rect.width;
-    const scaleY = this.canvas.height / rect.height;
-    const px = (e.clientX - rect.left) * scaleX;
-    const py = (e.clientY - rect.top) * scaleY;
-    return this.renderer.pickTile(px, py, this.state.map);
+    const cw = this.canvas.width;
+    const ch = this.canvas.height;
+    // object-fit:contain / 레터박스 보정 (비율 유지 시 offset=0)
+    const scale = Math.min(rect.width / cw, rect.height / ch);
+    const dispW = cw * scale;
+    const dispH = ch * scale;
+    const offX = (rect.width - dispW) / 2;
+    const offY = (rect.height - dispH) / 2;
+    const px = (e.clientX - rect.left - offX) / scale;
+    const py = (e.clientY - rect.top - offY) / scale;
+    if (px < -2 || py < -2 || px > cw + 2 || py > ch + 2) return null;
+    return this.renderer.pickTile(px, py, this.state.map, this.state.units);
   }
 
   onMove(e) {
@@ -277,6 +300,7 @@ export class Game {
         (this.state.mode === 'move' || this.state.mode === 'selected') &&
         target &&
         target.team === 'enemy' &&
+        !isHealAction(this.state.selected, 'normal') &&
         this.findApproachTile(this.state.selected, target)
       ) {
         this.ui.renderCombatPreview(this.state.selected, target, this.state.map, 'normal');
@@ -324,7 +348,11 @@ export class Game {
         return;
       }
       // 사거리(이동 포함) 안 적 클릭 → 자동 이동 후 공격
-      if (clicked && clicked.team === 'enemy') {
+      if (
+        clicked &&
+        clicked.team === 'enemy' &&
+        !isHealAction(this.state.selected, 'normal')
+      ) {
         const approach = this.findApproachTile(this.state.selected, clicked);
         if (approach) {
           this.autoMoveAndAttack(approach.x, approach.y, clicked);
@@ -351,6 +379,16 @@ export class Game {
       const heal = isHealAction(this.state.selected, kind);
 
       if (heal) {
+        // 기본 치유 모드: 자기 칸/빈 칸 → 마법 없이 대기
+        // 스킬·필살기: 자기 치유 허용
+        if (kind === 'normal' && (
+          (tile.x === this.state.selected.x && tile.y === this.state.selected.y) ||
+          !clicked
+        )) {
+          sfx.wait();
+          this.finishUnit(this.state.selected);
+          return;
+        }
         if (clicked && clicked.team === 'player') {
           const dist =
             Math.abs(clicked.x - this.state.selected.x) +
@@ -366,6 +404,14 @@ export class Game {
             return;
           }
         }
+        if (kind !== 'normal' && tile.x === this.state.selected.x && tile.y === this.state.selected.y) {
+          sfx.wait();
+          this.finishUnit(this.state.selected);
+          return;
+        }
+        sfx.cancel();
+        this.ui.log('아군을 치유하거나 대기(자기 칸/대기 버튼)로 종료하세요.');
+        return;
       } else if (clicked && clicked.team === 'enemy') {
         const inRange = this.state.attackTiles.some((t) => t.x === tile.x && t.y === tile.y);
         if (inRange) {
@@ -384,11 +430,9 @@ export class Game {
         }
       }
 
-      if (tile.x === this.state.selected.x && tile.y === this.state.selected.y && !heal) {
-        const name = this.state.selected.name;
+      if (tile.x === this.state.selected.x && tile.y === this.state.selected.y) {
         sfx.wait();
         this.finishUnit(this.state.selected);
-        this.ui.log(`${name}이(가) 대기합니다.`);
         return;
       }
       sfx.cancel();
@@ -397,17 +441,125 @@ export class Game {
   }
 
   /**
-   * 이동 가능 칸 중 적을 공격할 수 있는 최적 위치
+   * 우클릭: 스킬 선택·사용
+   * - 대상 위 → 자동 이동 후 스킬
+   * - 빈 칸/자기 → 스킬 조준 모드
+   * - 조준 중 빈 칸 → 취소
    */
-  findApproachTile(unit, enemy) {
-    if (!unit || !enemy || !enemy.alive) return null;
+  onRightClick(e) {
+    if (!this.state.started || this.state.over || this.busy) return;
+    if (this.state.phase !== 'player') return;
+
+    const tile = this.tileFromEvent(e);
+    const unit = this.state.selected;
+    if (!unit || unit.acted) {
+      if (unit) {
+        sfx.cancel();
+        this.cancelAction();
+      }
+      return;
+    }
+
+    if (!canUseSkill(unit)) {
+      this.ui.log(`${unit.name}의 MP가 부족합니다.`);
+      return;
+    }
+
+    const clicked = tile ? unitAt(this.state.units, tile.x, tile.y) : null;
+    const heal = isHealAction(unit, 'skill');
+    const mode = this.state.mode;
+
+    if (mode === 'selected' || mode === 'move') {
+      if (heal && clicked && clicked.team === 'player') {
+        const approach = this.findApproachTile(unit, clicked);
+        if (approach) {
+          this.autoMoveAndStrike(approach.x, approach.y, clicked, 'skill');
+          return;
+        }
+      }
+      if (!heal && clicked && clicked.team === 'enemy') {
+        const approach = this.findApproachTile(unit, clicked);
+        if (approach) {
+          this.autoMoveAndStrike(approach.x, approach.y, clicked, 'skill');
+          return;
+        }
+      }
+      this.armSkillMode();
+      return;
+    }
+
+    if (['attack', 'skill', 'ultimate', 'heal'].includes(mode)) {
+      if (heal && clicked && clicked.team === 'player') {
+        const dist =
+          Math.abs(clicked.x - unit.x) + Math.abs(clicked.y - unit.y);
+        const cls = CLASSES[unit.classId];
+        const ok = dist === 0 || (dist >= cls.rangeMin && dist <= cls.rangeMax);
+        if (ok) {
+          this.strikeKind = 'skill';
+          this.state.mode = 'skill';
+          this.ui.setActionMode('skill');
+          this.resolveHeal(unit, clicked, 'skill').then(() => {
+            if (unit.alive) this.finishUnit(unit);
+          });
+          return;
+        }
+      }
+      if (!heal && clicked && clicked.team === 'enemy') {
+        const inRange = this.state.attackTiles.some((t) => t.x === tile.x && t.y === tile.y);
+        if (inRange) {
+          this.strikeKind = 'skill';
+          this.state.mode = 'skill';
+          this.ui.setActionMode('skill');
+          this.resolveAttack(unit, clicked, 'skill').then(() => {
+            if (unit.alive) this.finishUnit(unit);
+            else {
+              this.state.selected = null;
+              this.state.mode = 'idle';
+              this.ui.hideActionBar();
+              this.checkEnd();
+              if (!this.state.over && this.allPlayerActed()) this.endPlayerTurn();
+            }
+          });
+          return;
+        }
+      }
+      // 스킬 모드가 아니면 스킬로 전환, 이미 스킬이면 취소
+      if (mode !== 'skill') {
+        this.setStrikeKind('skill');
+        return;
+      }
+      sfx.cancel();
+      this.cancelAction();
+    }
+  }
+
+  /** 현재 위치에서 스킬 조준 (이동 단계면 그 자리에서 공격 단계 진입) */
+  armSkillMode() {
+    const unit = this.state.selected;
+    if (!unit || !canUseSkill(unit)) return;
+    if (this.state.mode === 'move' || this.state.mode === 'selected') {
+      const cls = CLASSES[unit.classId];
+      this.state.moveTiles = [];
+      this.state.attackPreviewTiles = [];
+      this.state.attackTiles = getAttackTilesFrom(unit.x, unit.y, cls.rangeMin, cls.rangeMax);
+      this.ui.showActionBar(unit, isHealAction(unit, 'normal') ? 'heal' : 'attack');
+      this.ui.btnNormal.textContent = cls.heal ? '치유' : '일반 공격';
+    }
+    this.setStrikeKind('skill');
+    sfx.select();
+  }
+
+  /**
+   * 이동 가능 칸 중 대상을 공격/치유할 수 있는 최적 위치
+   */
+  findApproachTile(unit, target) {
+    if (!unit || !target || !target.alive) return null;
     const cls = CLASSES[unit.classId];
-    if (cls.heal) return null;
     const candidates = [];
     for (const m of this.state.moveTiles) {
       const occ = unitAt(this.state.units, m.x, m.y);
       if (occ && occ.id !== unit.id) continue;
-      const dist = Math.abs(m.x - enemy.x) + Math.abs(m.y - enemy.y);
+      const dist = Math.abs(m.x - target.x) + Math.abs(m.y - target.y);
       if (dist < cls.rangeMin || dist > cls.rangeMax) continue;
       candidates.push(m);
     }
@@ -425,23 +577,39 @@ export class Game {
   }
 
   async autoMoveAndAttack(x, y, enemy) {
+    return this.autoMoveAndStrike(x, y, enemy, 'normal');
+  }
+
+  async autoMoveAndStrike(x, y, target, kind = 'normal') {
     const unit = this.state.selected;
     if (!unit || this.busy) return;
+    if (kind === 'skill' && !canUseSkill(unit)) {
+      this.ui.log(`${unit.name}의 MP가 부족합니다.`);
+      return;
+    }
     this.busy = true;
     if (unit.x !== x || unit.y !== y) {
       unit.x = x;
       unit.y = y;
       sfx.move();
-      this.ui.log(`${unit.name} → (${x}, ${y}) 이동 후 공격`);
       await wait(220);
     }
     this.state.moveTiles = [];
     this.state.attackPreviewTiles = [];
     this.state.attackTiles = [];
-    this.state.mode = 'attack';
+    this.strikeKind = kind;
+    this.state.mode = kind === 'normal' ? 'attack' : kind;
     this.ui.hideActionBar();
     this.busy = false;
-    await this.resolveAttack(unit, enemy, 'normal');
+
+    const heal = isHealAction(unit, kind);
+    if (heal) {
+      await this.resolveHeal(unit, target, kind);
+      if (unit.alive) this.finishUnit(unit);
+      return;
+    }
+
+    await this.resolveAttack(unit, target, kind);
     if (unit.alive) this.finishUnit(unit);
     else {
       this.state.selected = null;
@@ -484,12 +652,14 @@ export class Game {
     const unit = this.state.selected;
     const cls = CLASSES[unit.classId];
     let attackTiles = getAttackTilesFrom(x, y, cls.rangeMin, cls.rangeMax);
-    // 성직자: 자기 자신도 치유 가능
-    if (cls.heal) attackTiles = [{ x, y }, ...attackTiles];
+    // 성직자: 스킬/필살기로만 자기 치유 — 기본 범위는 아군 타일
+    if (cls.heal) {
+      // 자기 칸은 대기용으로 쓰므로 기본 치유 타일에서 제외 (다른 아군만)
+    }
 
     const hasTarget = attackTiles.some((t) => {
       const u = unitAt(this.state.units, t.x, t.y);
-      if (cls.heal) return u && u.team === 'player' && u.hp < u.maxHp;
+      if (cls.heal) return u && u.team === 'player' && u.id !== unit.id && u.hp < u.maxHp;
       return u && u.team === 'enemy';
     });
 
@@ -501,19 +671,15 @@ export class Game {
     this.ui.renderUnit(unit, this.state.map);
     this.ui.renderInventory(this.inventory, unit);
 
-    if (!hasTarget && !cls.heal) {
+    // 성직자도 치유 대상이 없으면 마법 없이 바로 대기
+    if (!hasTarget) {
       sfx.wait();
       this.finishUnit(unit);
-      this.ui.log(`${unit.name}이(가) 이동 후 대기합니다.`);
       return;
     }
-    // 힐러는 풀피여도 아이템/대기 가능하도록 액션바 표시
+
     this.ui.showActionBar(unit, cls.heal ? 'heal' : 'attack');
-    if (cls.heal) {
-      this.ui.btnNormal.textContent = '치유';
-    } else {
-      this.ui.btnNormal.textContent = '일반 공격';
-    }
+    this.ui.btnNormal.textContent = cls.heal ? '치유' : '일반 공격';
   }
 
   cancelAction() {
@@ -569,13 +735,19 @@ export class Game {
     const mult = strikeMult(healer, kind);
     const fx = strikeFx(healer, kind);
     const label = strikeLabel(healer, kind);
+    const cost = strikeMpCost(healer, kind);
+
+    if (cost > 0 && !spendMp(healer, cost)) {
+      this.ui.log(`${healer.name}의 MP가 부족합니다.`);
+      this.busy = false;
+      this.ui.showActionBar(healer, kind === 'normal' ? 'heal' : kind);
+      return;
+    }
+    if (cost > 0) this.ui.log(`${healer.name} MP -${cost} (${healer.mp}/${healer.maxMp})`);
 
     if (kind === 'ultimate') sfx.ultimate();
     else if (kind === 'skill') sfx.skill();
     else sfx.heal();
-
-    if (kind === 'skill') healer.skillUsed = true;
-    if (kind === 'ultimate') healer.ultUsed = true;
 
     const targets = isAoeHeal(healer, kind)
       ? this.state.units.filter((u) => {
@@ -617,7 +789,15 @@ export class Game {
     this.busy = true;
     this.ui.hideActionBar();
     const isMagic = CLASSES[attacker.classId].weapon === '마법';
-    await this._playStrike(attacker, defender, isMagic, false, kind);
+    const ok = await this._playStrike(attacker, defender, isMagic, false, kind);
+    if (!ok) {
+      this.busy = false;
+      if (attacker.team === 'player' && !attacker.acted) {
+        this.state.selected = attacker;
+        this.ui.showActionBar(attacker, kind === 'normal' ? 'attack' : kind);
+      }
+      return;
+    }
     await wait(kind === 'ultimate' ? 320 : 220);
     if (kind === 'normal' && defender.alive && canCounter(attacker, defender)) {
       const counterMagic = CLASSES[defender.classId].weapon === '마법';
@@ -638,12 +818,18 @@ export class Game {
           : 'slash'
       : strikeFx(attacker, kind);
 
+    if (!isCounter) {
+      const cost = strikeMpCost(attacker, kind);
+      if (cost > 0 && !spendMp(attacker, cost)) {
+        this.ui.log(`${attacker.name}의 MP가 부족합니다.`);
+        return false;
+      }
+      if (cost > 0) this.ui.log(`${attacker.name} MP -${cost} (${attacker.mp}/${attacker.maxMp})`);
+    }
+
     if (kind === 'ultimate' && !isCounter) sfx.ultimate();
     else if (kind === 'skill' && !isCounter) sfx.skill();
     else sfx.attack(isMagic);
-
-    if (kind === 'skill' && !isCounter) attacker.skillUsed = true;
-    if (kind === 'ultimate' && !isCounter) attacker.ultUsed = true;
 
     let resolved = null;
     const applyHit = () => {
@@ -673,6 +859,9 @@ export class Game {
           defender.alive = false;
           sfx.defeat();
           this.ui.log(`${defender.name}이(가) 쓰러졌습니다.`, 'damage');
+          if (attacker.team === 'player' && defender.team === 'enemy') {
+            this._awardKillXp(attacker, defender);
+          }
         } else sfx.hit();
       }
     };
@@ -682,6 +871,50 @@ export class Game {
     if (attackObj) attackObj.onImpact = applyHit;
     await anim;
     if (!resolved) applyHit();
+    return true;
+  }
+
+  _awardKillXp(killer, victim) {
+    const events = grantKillXp(this.state.units, killer, victim);
+    this.rosterProgress = syncProgressFromUnits(this.rosterProgress, this.state.units);
+    const lines = [];
+    let title = '';
+    for (const ev of events) {
+      if (ev.kind === 'kill') {
+        title = `${ev.unit.name} 경험치 +${ev.gained}`;
+        this.renderer.addDamageFx(
+          this.state.map,
+          ev.unit.x,
+          ev.unit.y,
+          `+${ev.gained}XP`,
+          '#f0c35c'
+        );
+      } else {
+        lines.push(`${ev.unit.name} 지원 +${ev.gained}`);
+        this.renderer.addDamageFx(
+          this.state.map,
+          ev.unit.x,
+          ev.unit.y,
+          `+${ev.gained}`,
+          '#c9b87a'
+        );
+      }
+      if (ev.levelsGained > 0) {
+        sfx.win();
+        lines.push(`${ev.unit.name} 레벨 업! → Lv.${ev.newLevel}`);
+        this.renderer.addDamageFx(
+          this.state.map,
+          ev.unit.x,
+          ev.unit.y,
+          `Lv.${ev.newLevel}`,
+          '#7dffc0'
+        );
+      }
+    }
+    if (title || lines.length) {
+      this.ui.showXp(title || lines[0], title ? lines.join('\n') : lines.slice(1).join('\n'));
+    }
+    if (this.state.selected) this.ui.renderUnit(this.state.selected, this.state.map);
   }
 
   useConsumable(itemId) {
@@ -779,8 +1012,11 @@ export class Game {
     this.state.phase = 'enemy';
     this.ui.setPhase('enemy');
     sfx.phaseEnemy();
-    this.ui.log('적 페이즈', 'phase');
     this.busy = true;
+    // 적 턴 시작 시 적 MP 회복
+    for (const u of this.state.units) {
+      if (u.alive && u.team === 'enemy') regenMp(u);
+    }
     await wait(500);
 
     const enemies = this.state.units.filter((u) => u.alive && u.team === 'enemy');
@@ -799,6 +1035,7 @@ export class Game {
       if (u.team === 'player' && u.alive) {
         u.acted = false;
         u.moved = false;
+        regenMp(u);
       }
     }
     this.state.phase = 'player';
@@ -806,7 +1043,6 @@ export class Game {
     this.busy = false;
     this.ui.setPhase('player');
     sfx.phasePlayer();
-    this.ui.log('플레이어 페이즈', 'phase');
   }
 
   async runEnemy(enemy) {
@@ -835,7 +1071,6 @@ export class Game {
       enemy.x = decision.moveTo.x;
       enemy.y = decision.moveTo.y;
       sfx.move();
-      this.ui.log(`${enemy.name} 이동`);
       await wait(220);
     }
 

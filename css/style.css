@@ -25,7 +25,8 @@
 html,
 body {
   margin: 0;
-  min-height: 100%;
+  height: 100%;
+  overflow: hidden;
   background:
     radial-gradient(1200px 600px at 10% -10%, rgba(80, 140, 100, 0.22), transparent 55%),
     radial-gradient(900px 500px at 100% 0%, rgba(212, 168, 75, 0.12), transparent 50%),
@@ -49,17 +50,23 @@ body::before {
 #app {
   position: relative;
   z-index: 1;
-  max-width: 1440px;
+  box-sizing: border-box;
+  height: 100dvh;
+  max-width: 1600px;
   margin: 0 auto;
-  padding: 18px 20px 28px;
+  padding: 10px 14px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow: hidden;
 }
 
 .topbar {
   display: flex;
   align-items: center;
-  gap: 16px;
-  margin-bottom: 16px;
+  gap: 12px;
   flex-wrap: wrap;
+  flex-shrink: 0;
 }
 
 .brand {
@@ -121,10 +128,21 @@ body::before {
 }
 
 .layout {
+  flex: 1;
+  min-height: 0;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 300px;
-  gap: 16px;
+  grid-template-columns: minmax(0, 1fr) 280px;
+  gap: 12px;
   align-items: start;
+}
+
+.stage-column {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  min-height: 0;
+  max-height: 100%;
 }
 
 .stage-wrap {
@@ -138,8 +156,12 @@ body::before {
 
 #gameCanvas {
   display: block;
-  width: 100%;
+  width: min(100%, calc((100dvh - 120px) * 960 / 668));
   height: auto;
+  max-width: 100%;
+  max-height: calc(100dvh - 120px);
+  aspect-ratio: 960 / 668;
+  margin-inline: auto;
   cursor: pointer;
   background: #1a2c22;
 }
@@ -183,15 +205,34 @@ body::before {
 .sidebar {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
+  min-height: 0;
+  max-height: calc(100dvh - 72px);
+  overflow: auto;
+  position: sticky;
+  top: 0;
 }
 
 .panel {
   background: linear-gradient(180deg, var(--bg-panel-2), var(--bg-panel));
   border: 1px solid var(--line);
   border-radius: var(--radius);
-  padding: 14px 14px 12px;
+  padding: 12px;
   box-shadow: var(--shadow);
+  flex-shrink: 0;
+}
+
+.panel-inv {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.panel-inv .inventory-panel {
+  flex: 1;
+  max-height: none;
+  min-height: 0;
 }
 
 .panel h3 {
@@ -287,7 +328,7 @@ body::before {
 }
 
 .hp-bar {
-  margin-top: 10px;
+  margin-top: 4px;
   height: 8px;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.08);
@@ -305,6 +346,53 @@ body::before {
 
 .hp-bar.enemy > i {
   background: linear-gradient(90deg, #b4453a, #e0897d);
+}
+
+.mp-bar {
+  margin: 4px 0 10px;
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+
+.mp-bar > i {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, #3a6db4, #8bb6f0);
+  width: 100%;
+  transform-origin: left center;
+  transition: transform 0.25s ease;
+}
+
+.xp-bar {
+  margin: 4px 0 10px;
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+
+.xp-bar > i {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, #b8862a, #f0c35c);
+  width: 100%;
+  transform-origin: left center;
+  transition: transform 0.25s ease;
+}
+
+.bar-label {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 8px;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.bar-label strong {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
 }
 
 .unit-name {
@@ -402,31 +490,6 @@ body::before {
   flex-wrap: wrap;
   gap: 6px;
   margin-top: 8px;
-}
-
-.battle-log {
-  max-height: 180px;
-  overflow: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  font-size: 0.86rem;
-  color: var(--muted);
-}
-
-.battle-log .entry {
-  padding: 6px 8px;
-  border-radius: 8px;
-  background: rgba(0, 0, 0, 0.18);
-  animation: fadeIn 0.28s ease;
-}
-
-.battle-log .entry.damage {
-  color: #f0b4ae;
-}
-
-.battle-log .entry.phase {
-  color: var(--gold-strong);
 }
 
 .overlay {
@@ -539,6 +602,79 @@ body::before {
   color: #f0a39c;
 }
 
+.narration {
+  position: absolute;
+  left: 50%;
+  top: 44%;
+  transform: translate(-50%, -50%);
+  width: min(520px, calc(100% - 40px));
+  padding: 20px 24px;
+  border-radius: 14px;
+  border: 1px solid rgba(212, 168, 75, 0.4);
+  background: rgba(10, 18, 14, 0.92);
+  text-align: center;
+  z-index: 4;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.narration[hidden] {
+  display: none !important;
+}
+
+.narration.show {
+  display: block;
+  animation: narrationPulse 3.4s ease forwards;
+}
+
+.narration.xp.show {
+  animation: narrationPulse 2.1s ease forwards;
+  border-color: rgba(240, 195, 92, 0.55);
+  background: rgba(12, 20, 14, 0.94);
+}
+
+.narration.xp .narration-title {
+  color: #f0c35c;
+  font-size: 1.2rem;
+}
+
+.narration.xp .narration-body {
+  text-align: center;
+  color: #d8c9a0;
+}
+
+.narration-title {
+  margin: 0 0 10px;
+  font-family: var(--font-display);
+  font-size: 1.35rem;
+  letter-spacing: 0.06em;
+  color: var(--gold-strong);
+}
+
+.narration-body {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.92rem;
+  line-height: 1.65;
+  text-align: left;
+}
+
+@keyframes narrationPulse {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -42%) scale(0.96);
+  }
+  12%,
+  72% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -56%) scale(1.02);
+  }
+}
+
 @keyframes fadeIn {
   from { opacity: 0; }
   to { opacity: 1; }
@@ -578,17 +714,35 @@ body::before {
 }
 
 @media (max-width: 980px) {
+  html,
+  body {
+    overflow: auto;
+  }
+
+  #app {
+    height: auto;
+    min-height: 100dvh;
+    overflow: visible;
+  }
+
   .layout {
     grid-template-columns: 1fr;
+    flex: none;
+  }
+
+  .stage-wrap {
+    flex: none;
+  }
+
+  #gameCanvas {
+    width: min(100%, calc(70vh * 960 / 668));
+    max-height: 70vh;
   }
 
   .sidebar {
     display: grid;
     grid-template-columns: 1fr 1fr;
-  }
-
-  .log-panel {
-    grid-column: 1 / -1;
+    overflow: visible;
   }
 }
 

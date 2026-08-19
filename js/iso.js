@@ -36,24 +36,40 @@ export function diamondPoints(sx, sy) {
 }
 
 /**
- * 화면 좌표 → 격자 (고도 보정 탐색)
+ * 화면 좌표 → 격자
+ * - 유닛 스프라이트 영역 우선
+ * - 앞쪽(깊이 큰) 타일 우선, 고도 높은 칸 가산
  */
-export function fromScreen(px, py, map, ox, oy) {
+export function fromScreen(px, py, map, ox, oy, units = null) {
+  if (units?.length) {
+    const ordered = units
+      .filter((u) => u.alive)
+      .sort((a, b) => b.x + b.y - (a.x + a.y) || b.x - a.x);
+    for (const u of ordered) {
+      const elev = elevAt(map, u.x, u.y);
+      const { sx, sy } = toScreen(u.x, u.y, elev, ox, oy);
+      const cx = sx;
+      const cy = sy - 10;
+      if (Math.abs(px - cx) <= 18 && py >= cy - 46 && py <= cy + 24) {
+        return { x: u.x, y: u.y };
+      }
+    }
+  }
+
   let best = null;
-  let bestDist = Infinity;
+  let bestScore = -Infinity;
   for (let y = 0; y < ROWS; y++) {
     for (let x = 0; x < COLS; x++) {
       const elev = elevAt(map, x, y);
       const { sx, sy } = toScreen(x, y, elev, ox, oy);
-      // 마름모 hit-test (맨해튼 정규화)
       const dx = Math.abs(px - sx) / (ISO_W / 2);
       const dy = Math.abs(py - sy) / (ISO_H / 2);
-      if (dx + dy <= 1.05) {
-        const d = dx + dy;
-        if (d < bestDist) {
-          bestDist = d;
-          best = { x, y };
-        }
+      if (dx + dy > 1.08) continue;
+      // 앞쪽·고도·중심 근접을 점수화
+      const score = (x + y) * 10 + elev * 0.35 - (dx + dy);
+      if (score > bestScore) {
+        bestScore = score;
+        best = { x, y };
       }
     }
   }

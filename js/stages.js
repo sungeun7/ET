@@ -246,6 +246,7 @@ function scaleStats(base, level, isBoss = false) {
   const boss = isBoss ? 1.35 : 1;
   return {
     hp: Math.round((base.hp + lv * 3) * boss),
+    mp: Math.round((base.mp + lv * 1.2) * (isBoss ? 1.2 : 1)),
     atk: Math.round((base.atk + lv * 0.7) * boss),
     mag: Math.round((base.mag + lv * 0.7) * boss),
     def: Math.round((base.def + lv * 0.45) * boss),
@@ -265,6 +266,8 @@ export function createScaledUnit(id, name, classId, team, x, y, level, isBoss = 
   unit.isBoss = isBoss;
   unit.hp = stats.hp;
   unit.maxHp = stats.hp;
+  unit.mp = stats.mp;
+  unit.maxMp = stats.mp;
   unit.atk = stats.atk;
   unit.mag = stats.mag;
   unit.def = stats.def;

@@ -61,7 +61,7 @@ export const TERRAIN = {
 };
 
 /**
- * 병종 — skill/ult 스테이지당 각 1회
+ * 병종 — skill/ult 는 MP 소모
  * heal: true 이면 기본 행동이 아군 치유
  */
 export const CLASSES = {
@@ -70,6 +70,7 @@ export const CLASSES = {
     name: '기사',
     move: 3,
     hp: 28,
+    mp: 14,
     atk: 10,
     mag: 1,
     def: 8,
@@ -84,6 +85,7 @@ export const CLASSES = {
       desc: '방패로 강타해 1.7배 피해',
       mult: 1.7,
       fx: 'bash',
+      mpCost: 4,
     },
     ult: {
       id: 'holy_charge',
@@ -91,6 +93,7 @@ export const CLASSES = {
       desc: '빛의 돌격으로 2.5배 피해',
       mult: 2.5,
       fx: 'holy',
+      mpCost: 8,
     },
   },
   fighter: {
@@ -98,6 +101,7 @@ export const CLASSES = {
     name: '전사',
     move: 4,
     hp: 24,
+    mp: 12,
     atk: 11,
     mag: 1,
     def: 5,
@@ -112,6 +116,7 @@ export const CLASSES = {
       desc: '두 번의 베기로 1.65배 피해',
       mult: 1.65,
       fx: 'double',
+      mpCost: 4,
     },
     ult: {
       id: 'whirlwind',
@@ -119,6 +124,7 @@ export const CLASSES = {
       desc: '회전 참격으로 2.4배 피해',
       mult: 2.4,
       fx: 'whirl',
+      mpCost: 8,
     },
   },
   archer: {
@@ -126,6 +132,7 @@ export const CLASSES = {
     name: '궁수',
     move: 4,
     hp: 20,
+    mp: 14,
     atk: 9,
     mag: 1,
     def: 3,
@@ -140,6 +147,7 @@ export const CLASSES = {
       desc: '관통하는 화살로 1.7배 피해',
       mult: 1.7,
       fx: 'pierce',
+      mpCost: 4,
     },
     ult: {
       id: 'arrow_rain',
@@ -147,6 +155,7 @@ export const CLASSES = {
       desc: '화살비로 2.5배 피해',
       mult: 2.5,
       fx: 'rain',
+      mpCost: 8,
     },
   },
   mage: {
@@ -154,6 +163,7 @@ export const CLASSES = {
     name: '마법사',
     move: 4,
     hp: 18,
+    mp: 22,
     atk: 2,
     mag: 11,
     def: 2,
@@ -168,6 +178,7 @@ export const CLASSES = {
       desc: '마력 폭발로 1.75배 피해',
       mult: 1.75,
       fx: 'burst',
+      mpCost: 5,
     },
     ult: {
       id: 'emerald_nova',
@@ -175,6 +186,7 @@ export const CLASSES = {
       desc: '에메랄드 불꽃으로 2.6배 피해',
       mult: 2.6,
       fx: 'nova',
+      mpCost: 10,
     },
   },
   cleric: {
@@ -182,6 +194,7 @@ export const CLASSES = {
     name: '성직자',
     move: 4,
     hp: 20,
+    mp: 20,
     atk: 3,
     mag: 10,
     def: 3,
@@ -197,6 +210,7 @@ export const CLASSES = {
       desc: '아군 1명 강하게 치유',
       mult: 1.6,
       fx: 'heal',
+      mpCost: 5,
       heal: true,
     },
     ult: {
@@ -207,6 +221,7 @@ export const CLASSES = {
       fx: 'bless',
       heal: true,
       aoe: true,
+      mpCost: 9,
     },
   },
 };
@@ -238,6 +253,8 @@ export function createUnit(id, name, classId, team, x, y) {
     isBoss: false,
     hp: cls.hp,
     maxHp: cls.hp,
+    mp: cls.mp,
+    maxMp: cls.mp,
     atk: cls.atk,
     mag: cls.mag,
     def: cls.def,
@@ -245,8 +262,6 @@ export function createUnit(id, name, classId, team, x, y) {
     moved: false,
     acted: false,
     alive: true,
-    skillUsed: false,
-    ultUsed: false,
     equip: { weapon: null, armor: null },
   };
 }
