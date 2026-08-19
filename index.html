@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>에메랄드 택틱스</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700&family=Noto+Sans+KR:wght@400;500;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <div id="app">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark"></span>
+        <h1>에메랄드 택틱스</h1>
+      </div>
+      <div class="stage-pill" id="stageLabel">STAGE 1/50</div>
+      <div class="phase-pill" id="phaseLabel">플레이어 페이즈</div>
+      <div class="top-actions">
+        <button type="button" id="btnMute" class="btn btn-ghost" aria-pressed="false">소리 ON</button>
+        <button type="button" id="btnEndTurn" class="btn btn-gold" disabled>턴 종료</button>
+        <button type="button" id="btnRestart" class="btn btn-ghost">스테이지 재시작</button>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="stage-wrap">
+        <canvas id="gameCanvas" width="960" height="640" aria-label="전투 맵"></canvas>
+        <div class="banner" id="phaseBanner" hidden></div>
+        <div class="overlay" id="titleOverlay">
+          <div class="title-card">
+            <p class="eyebrow">Quest for the Emerald Blade</p>
+            <h2>에메랄드 택틱스</h2>
+            <p class="lede">
+              어둠이 왕국을 덮을 때, 운명의 기사는 전설의 에메랄드 소드를 찾아 떠난다.
+              산과 숲과 거센 파도를 건너, 빛의 문 앞에서 검은 왕과 맞서리라.
+            </p>
+            <ul class="how-to">
+              <li>유닛 클릭 → 이동 가능 칸 표시</li>
+              <li>노란 칸으로 이동 후 빨간 칸의 적 공격</li>
+              <li>5스테이지마다 관문 보스, 스테이지가 오를수록 적 강화</li>
+            </ul>
+            <p class="credit">서사 모티프 영감 · Rhapsody「Emerald Sword」(가사 미인용)</p>
+            <button type="button" id="btnStart" class="btn btn-gold btn-lg">여정 시작</button>
+          </div>
+        </div>
+        <div class="overlay" id="briefingOverlay" hidden>
+          <div class="title-card briefing-card">
+            <p class="eyebrow" id="briefingAct">제1막</p>
+            <h2 id="briefingTitle">새벽의 서약</h2>
+            <p class="lede story-body" id="briefingText"></p>
+            <button type="button" id="btnBriefing" class="btn btn-gold btn-lg">전투 개시</button>
+          </div>
+        </div>
+        <div class="overlay" id="resultOverlay" hidden>
+          <div class="title-card">
+            <h2 id="resultTitle">승리</h2>
+            <p id="resultText" class="lede story-body"></p>
+            <button type="button" id="btnAgain" class="btn btn-gold btn-lg">다시 도전</button>
+          </div>
+        </div>
+      </section>
+
+      <aside class="sidebar">
+        <div class="panel">
+          <h3>선택된 유닛</h3>
+          <div id="unitPanel" class="unit-panel empty">유닛을 선택하세요</div>
+        </div>
+        <div class="panel">
+          <h3>전투 미리보기</h3>
+          <div id="combatPreview" class="combat-preview empty">공격 대상을 지정하면 표시됩니다</div>
+        </div>
+        <div class="panel">
+          <h3>병종</h3>
+          <ul class="class-list">
+            <li><span class="dot knight"></span>기사 — 높은 방어 / 근접</li>
+            <li><span class="dot archer"></span>궁수 — 원거리 2칸</li>
+            <li><span class="dot mage"></span>마법사 — 마법 공격</li>
+            <li><span class="dot fighter"></span>전사 — 균형형</li>
+          </ul>
+        </div>
+        <div class="panel log-panel">
+          <h3>전투 기록</h3>
+          <div id="battleLog" class="battle-log"></div>
+        </div>
+      </aside>
+    </main>
+  </div>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
